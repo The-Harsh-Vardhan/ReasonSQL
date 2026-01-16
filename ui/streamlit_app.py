@@ -266,58 +266,139 @@ st.markdown("""
         font-weight: 600;
     }
     
-    /* ===== TIMELINE STEP ===== */
-    .timeline-step {
-        display: flex;
-        align-items: flex-start;
-        gap: 1rem;
-        padding: 0.75rem;
+    /* ===== EXECUTION STEP CARDS (4-SECTION LAYOUT) ===== */
+    .step-card {
         background: white;
-        border: 1px solid #e2e8f0;
+        border: 2px solid #e2e8f0;
         border-radius: 0.75rem;
-        margin-bottom: 0.5rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
         transition: all 0.2s ease;
     }
     
-    .timeline-step:hover {
+    .step-card:hover {
         border-color: #667eea;
-        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.1);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
     }
     
-    .timeline-icon {
-        font-size: 1.5rem;
-        width: 40px;
-        height: 40px;
+    .step-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 2px solid #f1f5f9;
+    }
+    
+    .step-icon {
+        font-size: 1.8rem;
+        width: 50px;
+        height: 50px;
         display: flex;
         align-items: center;
         justify-content: center;
         border-radius: 0.5rem;
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
     }
     
-    .timeline-icon-done {
-        background: #d1fae5;
-    }
-    
-    .timeline-icon-skip {
-        background: #f1f5f9;
-        opacity: 0.5;
-    }
-    
-    .timeline-content {
+    .step-title {
         flex: 1;
     }
     
-    .timeline-title {
+    .step-title-text {
+        font-size: 1rem;
         font-weight: 700;
-        color: #000000;
-        font-size: 0.9rem;
+        color: #0f172a;
+        margin-bottom: 0.25rem;
     }
     
-    .timeline-output {
-        font-size: 0.8rem;
-        color: #000000;
-        margin-top: 0.25rem;
-        font-weight: 500;
+    .step-badge {
+        display: inline-block;
+        font-size: 0.7rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.5rem;
+        font-weight: 600;
+    }
+    
+    .step-badge-llm {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+    
+    .step-badge-rule {
+        background: #f3e8ff;
+        color: #7c3aed;
+    }
+    
+    /* 4-Section Grid */
+    .step-sections {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+        margin-top: 1rem;
+    }
+    
+    .step-section {
+        background: #f8fafc;
+        border-radius: 0.5rem;
+        padding: 0.75rem;
+        border-left: 3px solid #cbd5e1;
+    }
+    
+    .step-section-input {
+        border-left-color: #3b82f6;
+    }
+    
+    .step-section-action {
+        border-left-color: #8b5cf6;
+    }
+    
+    .step-section-output {
+        border-left-color: #10b981;
+    }
+    
+    .step-section-reasoning {
+        border-left-color: #f59e0b;
+        grid-column: 1 / -1; /* Full width */
+    }
+    
+    .step-section-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .step-section-icon {
+        font-size: 1rem;
+    }
+    
+    .step-section-title {
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #475569;
+    }
+    
+    .step-section-content {
+        font-size: 0.85rem;
+        color: #1e293b;
+        line-height: 1.5;
+    }
+    
+    .step-section-empty {
+        font-style: italic;
+        color: #94a3b8;
+    }
+    
+    .step-section-long {
+        max-height: 200px;
+        overflow-y: auto;
+        padding: 0.5rem;
+        background: white;
+        border-radius: 0.25rem;
+        border: 1px solid #e2e8f0;
     }
     
     /* ===== HIDE DEFAULTS ===== */
@@ -613,6 +694,118 @@ def extract_llm_calls(trace: ReasoningTrace) -> int:
     return max_calls if max_calls > 0 else 4
 
 
+def render_step_card(step_num: int, action: AgentAction):
+    """
+    Render a single execution step with 4-section layout:
+    1. INPUT (what the agent received)
+    2. ACTION (what the agent did)
+    3. OUTPUT (what the agent produced)
+    4. REASONING (why/how it made decisions)
+    """
+    # Determine if LLM or rule-based
+    is_llm = any(p["name"] in action.agent_name and p["is_llm"] for p in AGENT_PIPELINE)
+    emoji = "🧠" if is_llm else "📦"
+    badge_class = "step-badge-llm" if is_llm else "step-badge-rule"
+    badge_text = "LLM Agent" if is_llm else "Rule-Based"
+    
+    # Extract content with fallbacks
+    input_text = action.input_summary if action.input_summary else "Not applicable"
+    action_text = action.action if action.action else "Processing step"
+    output_text = action.output_summary if action.output_summary else "Completed"
+    reasoning_text = action.reasoning if action.reasoning else ("Deterministic step (no LLM reasoning)" if not is_llm else "No reasoning recorded")
+    
+    # Truncate if too long (keep full text in expandable section)
+    def truncate(text, limit=300):
+        return text if len(text) <= limit else text[:limit] + "..."
+    
+    input_display = truncate(input_text, 200)
+    input_long = len(input_text) > 200
+    
+    action_display = truncate(action_text, 150)
+    action_long = len(action_text) > 150
+    
+    output_display = truncate(output_text, 250)
+    output_long = len(output_text) > 250
+    
+    reasoning_display = truncate(reasoning_text, 400)
+    reasoning_long = len(reasoning_text) > 400
+    
+    # Render card
+    st.markdown(f'''
+    <div class="step-card">
+        <div class="step-header">
+            <div class="step-icon">{emoji}</div>
+            <div class="step-title">
+                <div class="step-title-text">Step {step_num}: {action.agent_name}</div>
+                <span class="step-badge {badge_class}">{badge_text}</span>
+            </div>
+        </div>
+        
+        <div class="step-sections">
+            <!-- INPUT -->
+            <div class="step-section step-section-input">
+                <div class="step-section-header">
+                    <span class="step-section-icon">📥</span>
+                    <span class="step-section-title">Input</span>
+                </div>
+                <div class="step-section-content {"step-section-long" if input_long else ""}">
+                    {input_display}
+                </div>
+            </div>
+            
+            <!-- ACTION -->
+            <div class="step-section step-section-action">
+                <div class="step-section-header">
+                    <span class="step-section-icon">🎬</span>
+                    <span class="step-section-title">Action</span>
+                </div>
+                <div class="step-section-content {"step-section-long" if action_long else ""}">
+                    {action_display}
+                </div>
+            </div>
+            
+            <!-- OUTPUT -->
+            <div class="step-section step-section-output">
+                <div class="step-section-header">
+                    <span class="step-section-icon">📤</span>
+                    <span class="step-section-title">Output</span>
+                </div>
+                <div class="step-section-content {"step-section-long" if output_long else ""}">
+                    {output_display}
+                </div>
+            </div>
+            
+            <!-- REASONING -->
+            <div class="step-section step-section-reasoning">
+                <div class="step-section-header">
+                    <span class="step-section-icon">🤔</span>
+                    <span class="step-section-title">Reasoning</span>
+                </div>
+                <div class="step-section-content {"step-section-long" if reasoning_long else ""}">
+                    {reasoning_display}
+                </div>
+            </div>
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+    
+    # If any section was truncated, show full version in expander
+    if input_long or action_long or output_long or reasoning_long:
+        with st.expander("🔍 View Full Details", expanded=False):
+            if input_long:
+                st.markdown("**📥 Full Input:**")
+                st.text_area("Input", input_text, height=100, label_visibility="collapsed", key=f"input_{step_num}_{hash(action.agent_name)}")
+            if action_long:
+                st.markdown("**🎬 Full Action:**")
+                st.text_area("Action", action_text, height=80, label_visibility="collapsed", key=f"action_{step_num}_{hash(action.agent_name)}")
+            if output_long:
+                st.markdown("**📤 Full Output:**")
+                st.text_area("Output", output_text, height=120, label_visibility="collapsed", key=f"output_{step_num}_{hash(action.agent_name)}")
+            if reasoning_long:
+                st.markdown("**🤔 Full Reasoning:**")
+                st.text_area("Reasoning", reasoning_text, height=150, label_visibility="collapsed", key=f"reasoning_{step_num}_{hash(action.agent_name)}")
+
+
 # ============================================================
 # VISUAL AGENT MAP (NEW - Horizontal Flow)
 # ============================================================
@@ -738,9 +931,11 @@ def render_reasoning_panel(response: FinalResponse):
     """
     Unified reasoning panel with:
     - Visual agent map at top
-    - Compact timeline
-    - Expandable details per agent
-    - Provider badges showing Gemini/Groq usage
+    - Detailed execution steps with 4-section layout:
+      1. INPUT - what the agent received
+      2. ACTION - what the agent did
+      3. OUTPUT - what the agent produced
+      4. REASONING - why/how it made decisions
     """
     trace = response.reasoning_trace
     
@@ -750,29 +945,12 @@ def render_reasoning_panel(response: FinalResponse):
     
     st.markdown("---")
     
-    # Compact Timeline
-    st.markdown("#### 📋 Execution Steps")
+    # Detailed Execution Steps
+    st.markdown("#### 📋 Detailed Execution Steps")
+    st.caption("Each step shows: Input → Action → Output → Reasoning")
     
     for i, action in enumerate(trace.actions, 1):
-        # Find matching pipeline info
-        is_llm = any(p["name"] in action.agent_name and p["is_llm"] for p in AGENT_PIPELINE)
-        emoji = "🧠" if is_llm else "📦"
-        
-        with st.expander(f"{emoji} **Step {i}: {action.agent_name}**", expanded=False):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**Action:**")
-                st.info(action.action if action.action else "Processing")
-            
-            with col2:
-                st.markdown("**Output:**")
-                output_text = action.output_summary if action.output_summary else "✓ Completed"
-                st.success(output_text[:300])
-            
-            if action.reasoning:
-                st.markdown("**Reasoning:**")
-                st.caption(action.reasoning[:500])
+        render_step_card(i, action)
     
     # Legend
     st.markdown("---")
