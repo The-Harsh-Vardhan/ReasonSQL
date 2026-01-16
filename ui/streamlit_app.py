@@ -309,13 +309,13 @@ st.markdown("""
     
     .timeline-title {
         font-weight: 700;
-        color: #0f172a;
+        color: #000000;
         font-size: 0.9rem;
     }
     
     .timeline-output {
         font-size: 0.8rem;
-        color: #334155;
+        color: #000000;
         margin-top: 0.25rem;
         font-weight: 500;
     }
@@ -356,7 +356,8 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
     }
     
-    /* ===== TAB STYLING ===== */
+    /* ===== TAB STYLING - FORCE VISIBILITY ===== */
+    /* CRITICAL FIX: Tab text must be visible without hover on light theme */
     .stTabs [data-baseweb="tab-list"] {
         gap: 0.5rem;
     }
@@ -364,13 +365,143 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] {
         border-radius: 0.5rem;
         padding: 0.5rem 1rem;
+        font-weight: 600;
+        color: #000000 !important; /* Dark text always visible */
+        background-color: #f1f5f9;
+    }
+    
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white !important;
+    }
+    
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #e2e8f0;
+        color: #000000 !important;
+    }
+    
+    .stTabs [data-baseweb="tab"][aria-selected="true"]:hover {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white !important;
+    }
+    
+    /* ===== EXPANDER STYLING - BLACK TEXT, WHITE ON HOVER ===== */
+    /* CRITICAL FIX: Expander text black by default, white on hover with dark background */
+    .streamlit-expanderHeader {
+        background: #f8fafc !important;
+        border-radius: 0.5rem;
+        color: #000000 !important; /* Black text by default */
+        transition: all 0.3s ease;
+    }
+    
+    .streamlit-expanderHeader p,
+    .streamlit-expanderHeader span,
+    .streamlit-expanderHeader strong,
+    .streamlit-expanderHeader em,
+    .streamlit-expanderHeader * {
+        color: #000000 !important;
+        font-weight: 600 !important;
+        transition: color 0.3s ease;
+    }
+    
+    .streamlit-expanderHeader:hover {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
+    }
+    
+    .streamlit-expanderHeader:hover p,
+    .streamlit-expanderHeader:hover span,
+    .streamlit-expanderHeader:hover strong,
+    .streamlit-expanderHeader:hover em,
+    .streamlit-expanderHeader:hover * {
+        color: #ffffff !important; /* White text on hover */
+    }
+    
+    /* ===== REASONING PAGE TEXT VISIBILITY ===== */
+    /* CRITICAL FIX: All text on reasoning page must be dark and readable */
+    .stMarkdown, .stMarkdown p, .stMarkdown span {
+        color: #000000 !important;
+    }
+    
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {
+        color: #000000 !important;
+    }
+    
+    /* Force visibility in info/success/caption boxes */
+    .stAlert p, .stSuccess p, .stInfo p, .stCaption {
+        color: #000000 !important;
+    }
+    
+    /* Sidebar text visibility - WHITE for contrast */
+    .css-1d391kg, [data-testid="stSidebar"] {
+        color: #ffffff !important;
+    }
+    
+    [data-testid="stSidebar"] .stMarkdown p {
+        color: #ffffff !important;
+    }
+    
+    [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        color: #ffffff !important;
+    }
+    
+    [data-testid="stSidebar"] .stCaption {
+        color: #e2e8f0 !important;
+    }
+    
+    /* Query example cards in sidebar */
+    .query-card {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 0.5rem;
+        padding: 0.75rem;
+        margin-bottom: 0.5rem;
+        transition: all 0.2s ease;
+    }
+    
+    .query-card:hover {
+        border-color: #667eea;
+        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.1);
+    }
+    
+    .query-category {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: #94a3b8 !important;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.25rem;
+    }
+    
+    .query-text {
+        font-size: 0.85rem;
+        color: #e2e8f0 !important;
         font-weight: 500;
     }
     
-    /* ===== EXPANDER STYLING ===== */
-    .streamlit-expanderHeader {
+    /* Recent query cards */
+    .recent-query-card {
         background: #f8fafc;
-        border-radius: 0.5rem;
+        border-left: 3px solid #667eea;
+        padding: 0.5rem;
+        margin-bottom: 0.5rem;
+        border-radius: 0.25rem;
+    }
+    
+    .recent-query-status {
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #94a3b8 !important;
+    }
+    
+    .recent-query-text {
+        font-size: 0.8rem;
+        color: #ffffff !important;
+        margin: 0.25rem 0;
+    }
+    
+    .recent-query-time {
+        font-size: 0.7rem;
+        color: #cbd5e1 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -457,8 +588,14 @@ def find_agent_in_trace(agent_name: str, trace_actions: List[AgentAction]) -> Op
 def get_stage_status(stage: Dict, trace_actions: List[AgentAction]) -> AgentStatus:
     """Determine if a stage was executed."""
     for agent_name in stage["agents"]:
-        if find_agent_in_trace(agent_name, trace_actions):
+        result = find_agent_in_trace(agent_name, trace_actions)
+        if result:
             return AgentStatus.DONE
+    # Check if any action contains the stage key in its name (partial match)
+    for action in trace_actions:
+        for agent_name in stage["agents"]:
+            if agent_name.lower() in action.agent_name.lower():
+                return AgentStatus.DONE
     return AgentStatus.SKIPPED
 
 
@@ -646,7 +783,7 @@ def render_reasoning_panel(response: FinalResponse):
 
 
 # ============================================================
-# SIDEBAR (Simplified)
+# SIDEBAR (Enhanced with Query Categories)
 # ============================================================
 
 def render_sidebar():
@@ -664,30 +801,75 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # Example queries
-        st.markdown("### 📚 Examples")
+        # Try These Queries - Categorized
+        st.markdown("### 🎯 Try These Queries")
         
-        examples = [
-            "How many customers from Brazil?",
-            "What tables exist?",
-            "Top 5 artists by tracks",
-            "Total revenue by country",
-            "Show me recent orders",
-        ]
+        query_categories = {
+            "📊 Simple": [
+                "Show me all customers",
+                "List all artists",
+            ],
+            "🔍 Meta": [
+                "What tables exist?",
+                "Show me the schema",
+            ],
+            "📈 Aggregate": [
+                "How many tracks are there?",
+                "Total revenue by country",
+            ],
+            "🔗 Join": [
+                "Top 5 artists by tracks",
+                "Customer purchases by genre",
+            ],
+            "❓ Ambiguous": [
+                "Show me recent orders",
+                "Popular items",
+            ],
+            "🧩 Complex": [
+                "Top customers with most purchases",
+                "Artists with no albums",
+            ]
+        }
         
-        for q in examples:
-            if st.button(q[:25] + "..." if len(q) > 25 else q, key=f"ex_{hash(q)}", use_container_width=True):
-                st.session_state.current_query = q
-                st.rerun()
+        for category, queries in query_categories.items():
+            with st.expander(f"**{category}**", expanded=False):
+                for q in queries:
+                    if st.button(q, key=f"cat_{hash(category + q)}", use_container_width=True):
+                        st.session_state.current_query = q
+                        st.rerun()
         
         st.markdown("---")
         
-        # History
+        # Recent Queries
         if st.session_state.history:
-            st.markdown("### 📜 History")
+            st.markdown("### 📜 Recent Queries")
             for item in reversed(st.session_state.history[-3:]):
-                icon = "✅" if item['status'] == 'success' else "📭"
-                st.caption(f"{icon} {item['query'][:30]}...")
+                status_icon = "✅" if item['status'] == 'success' else "❌"
+                time_text = f"{item['time']:.0f}ms" if 'time' in item else "N/A"
+                
+                st.markdown(f"""
+                <div class="recent-query-card">
+                    <div class="recent-query-status">{status_icon} {item['status'].upper()}</div>
+                    <div class="recent-query-text">{item['query'][:40]}...</div>
+                    <div class="recent-query-time">⏱️ {time_text}</div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Display Settings
+        st.markdown("### ⚙️ Display Settings")
+        st.caption("Theme: Light Mode")
+        st.caption("Auto-refresh: Off")
+        
+        st.markdown("---")
+        
+        # Technical Details
+        st.markdown("### 🔧 Technical Details")
+        st.caption("Database: Chinook SQLite")
+        st.caption("LLM: Groq Llama 3.3")
+        st.caption("Framework: CrewAI")
+        st.caption("Rate Limit: 5 req/min")
 
 
 # ============================================================
