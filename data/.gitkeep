@@ -1,0 +1,2 @@
+# This file ensures the data/ directory is tracked by Git
+# even when it contains no other tracked files.

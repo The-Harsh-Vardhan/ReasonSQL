@@ -1,0 +1,112 @@
+# =====================================================
+# NL2SQL Multi-Agent System - Git Ignore Configuration
+# =====================================================
+
+# --------------------------
+# Python
+# --------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --------------------------
+# Virtual Environments
+# --------------------------
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# --------------------------
+# IDE & Editor
+# --------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+*.sublime-workspace
+*.sublime-project
+
+# --------------------------
+# Environment & Secrets
+# --------------------------
+# CRITICAL: Never commit .env file with real API keys!
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# --------------------------
+# OS Files
+# --------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --------------------------
+# Project Specific
+# --------------------------
+# Logs
+logs/
+*.log
+
+# Database (keep chinook.db.example, ignore real data)
+data/*.db
+!data/.gitkeep
+!data/README.md
+
+# Cache
+.cache/
+*.cache
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+
+# --------------------------
+# Build Artifacts
+# --------------------------
+*.manifest
+*.spec
+*.pyc
+*.pyo
+
+# --------------------------
+# Streamlit
+# --------------------------
+.streamlit/secrets.toml

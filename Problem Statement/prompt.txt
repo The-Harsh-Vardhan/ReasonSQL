@@ -1,0 +1,177 @@
+You are an expert software architect and AI engineer.
+
+I am building a Natural Language → SQL system using CrewAI with multiple agents.
+This is NOT a naive text-to-SQL system.
+
+My goal is to build a system that demonstrates deep understanding of:
+- SQL
+- database schema reasoning
+- failure handling
+- self-correction
+- explainability
+- resource-conscious querying
+
+========================
+CORE REQUIREMENTS
+========================
+
+Build a working Python-based system that satisfies ALL of the following:
+
+1. Natural language input → SQL → human-readable output
+2. Works on a provided SQLite database (assume chinook.db-style relational schema)
+3. Shows a reasoning trace visible to the user (step-by-step agent decisions)
+4. Handles at least one failure gracefully:
+   - SQL error
+   - empty result
+   - ambiguous input
+5. Implements self-correction:
+   - if SQL fails or returns empty result
+   - retry with a revised strategy
+6. Performs schema exploration BEFORE querying:
+   - tables
+   - columns
+   - relationships
+7. Asks clarifying questions when user input is ambiguous
+8. Is resource-conscious:
+   - NO blind SELECT *
+   - enforce LIMIT
+   - select only required columns
+9. Supports meta-queries:
+   - “what tables exist?”
+   - “what columns does X have?”
+   - “how are tables related?”
+
+========================
+ARCHITECTURAL CONSTRAINTS
+========================
+
+- Use CrewAI with multiple specialized agents
+- Do NOT use high-level text-to-SQL SaaS or black-box libraries
+- Do NOT hardcode answers for specific questions
+- SQL generation must be explicit and inspectable
+- The system must work even if the LLM is wrong on the first attempt
+- Each agent must have a clearly defined responsibility
+- Reasoning must be surfaced to the UI or logs
+
+========================
+REQUIRED AGENTS
+========================
+
+Design and implement at least these agents:
+
+1. SchemaExplorerAgent
+   - Inspects database schema
+   - Retrieves tables, columns, foreign keys
+   - Answers meta-queries
+   - Produces a structured schema summary
+
+2. IntentAnalyzerAgent
+   - Determines if the input is:
+     a) data query
+     b) schema/meta query
+     c) ambiguous query
+   - Decides whether clarification is needed
+
+3. QueryPlannerAgent
+   - Uses schema context to design a query plan
+   - Decides which tables, joins, filters are needed
+   - Enforces safety rules (no SELECT *, LIMIT usage)
+
+4. SQLGeneratorAgent
+   - Generates SQL strictly from the query plan
+   - Outputs SQL only (no prose)
+
+5. SQLExecutorAgent
+   - Executes SQL against the database
+   - Captures:
+     - results
+     - errors
+     - empty outputs
+
+6. SelfCorrectionAgent
+   - Activated when:
+     - SQL fails
+     - result set is empty but shouldn’t be
+   - Revises assumptions
+   - Proposes a new query plan and SQL
+
+7. ResponseSynthesizerAgent
+   - Converts SQL results into human-readable output
+   - Explains what was queried and why
+
+========================
+SYSTEM BEHAVIOR
+========================
+
+The system must:
+
+- Show a full reasoning trace:
+  - which agent acted
+  - what decision it made
+  - what input/output it produced
+
+- Support at least 5 demo queries of increasing complexity where:
+  - a naive “schema + question → LLM → SQL” approach would fail
+  - your system succeeds via:
+    - schema inspection
+    - retry
+    - clarification
+    - or self-correction
+
+Examples of difficult queries:
+- ambiguous column names
+- implicit joins
+- vague phrasing (“top customers”, “recent”, “popular”)
+- empty-result traps
+- schema misunderstanding
+
+========================
+DELIVERABLES TO GENERATE
+========================
+
+1. Source code (Python)
+   - Modular
+   - Well-structured
+   - No magic abstractions
+
+2. Brief documentation (README.md)
+   - System architecture
+   - Agent responsibilities
+   - Why naive text-to-SQL fails
+   - Why this system is better
+
+3. Demo script
+   - At least 5 example queries
+   - Show reasoning trace
+   - Show failure + self-correction
+
+4. Minimal CLI or Streamlit UI
+   - Input: natural language question
+   - Output:
+     - reasoning trace
+     - generated SQL
+     - final answer
+
+========================
+IMPORTANT GUIDELINES
+========================
+
+- Favor explicit logic over clever shortcuts
+- Keep SQL readable and correct
+- Make failure modes visible
+- Assume judges will inspect the code
+- This is a systems-thinking problem, not just an LLM prompt problem
+
+========================
+TASK
+========================
+
+Generate:
+1. A proposed folder structure
+2. Core Python classes for each agent
+3. The CrewAI orchestration logic
+4. Example prompts for each agent
+5. Safety and retry logic
+6. A minimal runnable example
+
+Think step-by-step and build this as if it will be judged by experienced engineers.

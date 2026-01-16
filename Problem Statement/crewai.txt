@@ -1,0 +1,7 @@
+So I have decided to use a new approach to this problem with multiple agent using crewAI.
+Here are some useful links which you may use
+https://docs.crewai.com/en/tools/database-data/nl2sqltool
+
+https://medium.com/the-ai-forum/create-a-sql-agent-using-crewai-and-groq-005895ba31b3
+
+https://docs.composio.dev/docs/welcome
