@@ -1,12 +1,15 @@
 """
-NL2SQL Multi-Agent System - Streamlit Web UI (Refactored)
+NL2SQL Multi-Agent System - Streamlit Web UI (Refactored v3)
 
-DESIGN CHANGES (v2):
+DESIGN CHANGES (v3 - Demo Ready):
 1. LIGHT THEME - Clean white/gray with soft gradients
 2. VISUAL AGENT MAP - Horizontal flow showing 12 agents as cards
 3. FLASHY BUT LOW-TEXT - Icons, badges, short labels over paragraphs  
 4. MERGED TABS - "📦 Result" and "🧠 Reasoning" only
 5. JUDGE-FRIENDLY - Get the system in 5 seconds
+6. DEMO MODE - 5 preset queries with auto-run option
+7. JUDGE MODE - Collapsed reasoning by default, key steps highlighted
+8. RATE LIMIT PROTECTION - Prevents demo failures
 """
 import streamlit as st
 import sys
@@ -14,12 +17,56 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from enum import Enum
+from datetime import datetime, timedelta
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orchestrator import NL2SQLOrchestrator
 from models import ExecutionStatus, FinalResponse, ReasoningTrace, AgentAction
+from baseline import run_naive_query, format_naive_result_for_display, NAIVE_DISCLAIMER, NAIVE_COMPARISON_LABEL
+
+
+# ============================================================
+# DEMO MODE CONFIGURATION
+# ============================================================
+
+DEMO_QUERIES = [
+    {
+        "category": "🔢 Simple Query",
+        "query": "How many customers are from Brazil?",
+        "description": "Tests basic SELECT COUNT with WHERE clause"
+    },
+    {
+        "category": "📋 Meta Query",
+        "query": "What tables exist in this database?",
+        "description": "Tests schema introspection (no SQL generated)"
+    },
+    {
+        "category": "🔗 Join + Aggregation",
+        "query": "Which 5 artists have the most tracks?",
+        "description": "Tests multi-table JOIN with GROUP BY and ORDER BY"
+    },
+    {
+        "category": "❓ Ambiguous Query",
+        "query": "Show me recent invoices",
+        "description": "Tests clarification agent (resolves 'recent' → 30 days)"
+    },
+    {
+        "category": "🧩 Edge Case",
+        "query": "Find customers who have never made a purchase",
+        "description": "Tests LEFT JOIN with NULL check (may return empty)"
+    }
+]
+
+# Key agents to highlight in Judge Mode
+KEY_AGENTS_FOR_JUDGES = [
+    "IntentAnalyzer",
+    "SchemaExplorer", 
+    "QueryPlanner",
+    "SafetyValidator",
+    "ResponseSynthesizer"
+]
 
 
 # ============================================================
@@ -584,6 +631,82 @@ st.markdown("""
         font-size: 0.7rem;
         color: #cbd5e1 !important;
     }
+    
+    /* ===== COMPARISON MODE STYLES ===== */
+    .comparison-header {
+        text-align: center;
+        padding: 0.75rem;
+        margin-bottom: 1rem;
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        border-radius: 0.5rem;
+        border: 2px solid #f59e0b;
+    }
+    
+    .comparison-header-text {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #b45309;
+    }
+    
+    .naive-panel {
+        background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+        border: 2px solid #ef4444;
+        border-radius: 0.75rem;
+        padding: 1rem;
+    }
+    
+    .multiagent-panel {
+        background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+        border: 2px solid #22c55e;
+        border-radius: 0.75rem;
+        padding: 1rem;
+    }
+    
+    .panel-title {
+        font-size: 0.9rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .naive-title {
+        color: #dc2626;
+    }
+    
+    .multiagent-title {
+        color: #16a34a;
+    }
+    
+    .panel-subtitle {
+        font-size: 0.7rem;
+        color: #6b7280;
+        margin-bottom: 1rem;
+    }
+    
+    .naive-status-badge {
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        border-radius: 1rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    
+    .naive-status-success {
+        background: #dcfce7;
+        color: #16a34a;
+    }
+    
+    .naive-status-error {
+        background: #fee2e2;
+        color: #dc2626;
+    }
+    
+    .naive-status-blocked {
+        background: #fef3c7;
+        color: #b45309;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -638,6 +761,19 @@ def init_session_state():
         'current_query': "",
         'is_processing': False,
         'last_response': None,
+        # Demo Mode additions
+        'demo_mode': False,
+        'demo_index': 0,
+        'demo_running': False,
+        # Judge Mode additions
+        'judge_mode': True,  # ON by default for cleaner presentation
+        # Rate limiting
+        'last_query_time': None,
+        'query_count_this_minute': 0,
+        'provider_status': 'primary',  # 'primary', 'fallback', or 'exhausted'
+        # Naive comparison mode
+        'compare_naive': False,
+        'naive_result': None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -648,6 +784,33 @@ def get_orchestrator() -> NL2SQLOrchestrator:
     if st.session_state.orchestrator is None:
         st.session_state.orchestrator = NL2SQLOrchestrator(verbose=False)
     return st.session_state.orchestrator
+
+
+def check_rate_limit() -> tuple[bool, str]:
+    """
+    Check if we're within safe rate limits for demo.
+    Returns (is_allowed, message)
+    """
+    now = datetime.now()
+    
+    # Reset counter every minute
+    if st.session_state.last_query_time:
+        time_since_last = now - st.session_state.last_query_time
+        if time_since_last > timedelta(minutes=1):
+            st.session_state.query_count_this_minute = 0
+    
+    # Allow max 4 queries per minute (safe for demo)
+    if st.session_state.query_count_this_minute >= 4:
+        seconds_to_wait = 60 - (now - st.session_state.last_query_time).seconds
+        return False, f"⏳ Rate limit reached. Please wait {seconds_to_wait}s before next query."
+    
+    return True, ""
+
+
+def update_rate_limit():
+    """Update rate limit counters after a query."""
+    st.session_state.last_query_time = datetime.now()
+    st.session_state.query_count_this_minute += 1
 
 
 # ============================================================
@@ -694,17 +857,22 @@ def extract_llm_calls(trace: ReasoningTrace) -> int:
     return max_calls if max_calls > 0 else 4
 
 
-def render_step_card(step_num: int, action: AgentAction):
+def render_step_card(step_num: int, action: AgentAction, compact: bool = False):
     """
     Render a single execution step with 3-section layout using native Streamlit components:
     1. INPUT (what the agent received)
     2. OUTPUT (what the agent produced)
     3. REASONING (why/how it made decisions)
+    
+    compact: If True, shows abbreviated view for Judge Mode
     """
     # Determine if LLM or rule-based
     is_llm = any(p["name"] in action.agent_name and p["is_llm"] for p in AGENT_PIPELINE)
     emoji = "🧠" if is_llm else "📦"
     badge_text = "LLM Agent" if is_llm else "Rule-Based"
+    
+    # Check if this is a key agent (highlight in Judge Mode)
+    is_key_agent = action.agent_name in KEY_AGENTS_FOR_JUDGES
     
     # Extract content with fallbacks - show data as-is from backend
     input_text = action.input_summary if action.input_summary else "Not applicable"
@@ -724,40 +892,50 @@ def render_step_card(step_num: int, action: AgentAction):
             st.markdown(f"## {emoji}")
         with header_col2:
             badge_color = "blue" if is_llm else "violet"
-            st.markdown(f"### Step {step_num}: {action.agent_name}")
+            key_badge = " ⭐" if is_key_agent else ""
+            st.markdown(f"### Step {step_num}: {action.agent_name}{key_badge}")
             st.caption(f":{badge_color}[{badge_text}]")
         
-        # 3 Sections: Input | Output (top row), Reasoning (bottom full width)
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # INPUT Section
-            st.markdown("##### 📥 Input")
+        if compact:
+            # COMPACT MODE for Judge Mode - single line summary
             with st.container(border=True):
-                display_text = truncate(input_text, 200)
-                st.markdown(display_text)
-                if len(input_text) > 200:
-                    with st.expander("Show full input"):
-                        st.text(input_text)
-        
-        with col2:
-            # OUTPUT Section
-            st.markdown("##### 📤 Output")
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.markdown("**Output:**")
+                with col2:
+                    st.markdown(truncate(output_text, 150))
+        else:
+            # FULL MODE - 3 Sections: Input | Output (top row), Reasoning (bottom full width)
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # INPUT Section
+                st.markdown("##### 📥 Input")
+                with st.container(border=True):
+                    display_text = truncate(input_text, 200)
+                    st.markdown(display_text)
+                    if len(input_text) > 200:
+                        with st.expander("Show full input"):
+                            st.text(input_text)
+            
+            with col2:
+                # OUTPUT Section
+                st.markdown("##### 📤 Output")
+                with st.container(border=True):
+                    display_text = truncate(output_text, 250)
+                    st.markdown(display_text)
+                    if len(output_text) > 250:
+                        with st.expander("Show full output"):
+                            st.text(output_text)
+            
+            # REASONING Section (full width)
+            st.markdown("##### 🤔 Reasoning")
             with st.container(border=True):
-                display_text = truncate(output_text, 250)
+                display_text = truncate(reasoning_text, 400)
                 st.markdown(display_text)
-                if len(output_text) > 250:
-                    with st.expander("Show full output"):
-                        st.text(output_text)
-        
-        # REASONING Section (full width)
-        st.markdown("##### 🤔 Reasoning")
-        with st.container(border=True):
-            display_text = truncate(reasoning_text, 400)
-            st.markdown(display_text)
-            if len(reasoning_text) > 400:
-                with st.expander("Show full reasoning"):
-                    st.text(reasoning_text)
+                if len(reasoning_text) > 400:
+                    with st.expander("Show full reasoning"):
+                        st.text(reasoning_text)
         
         st.divider()
 
@@ -790,7 +968,7 @@ def render_skipped_agent(step_num: int, agent_info: Dict):
 # VISUAL AGENT MAP (NEW - Horizontal Flow)
 # ============================================================
 
-def render_agent_map(trace_actions: List[AgentAction] = None):
+def render_agent_map(trace_actions: Optional[List[AgentAction]] = None):
     """
     Render a horizontal visual agent map showing the pipeline flow.
     Each stage is a node with status indicator.
@@ -832,6 +1010,144 @@ def render_agent_map(trace_actions: List[AgentAction] = None):
 
 
 # ============================================================
+# NAIVE COMPARISON PANEL
+# ============================================================
+
+def render_naive_comparison_panel():
+    """
+    Render side-by-side comparison of naive vs multi-agent results.
+    
+    Layout:
+    - Header: "Why Multi-Agent Matters"
+    - Left column: Naive baseline (red theme)
+    - Right column: Multi-agent system (green theme)
+    """
+    naive_result = st.session_state.get('naive_result')
+    response = st.session_state.get('last_response')
+    
+    if not naive_result or not response:
+        return
+    
+    # Format the naive result for display
+    naive_display = format_naive_result_for_display(naive_result)
+    
+    # Comparison header
+    st.markdown('''
+    <div class="comparison-header">
+        <div class="comparison-header-text">
+            ⚖️ COMPARISON MODE: Why Multi-Agent Reasoning Matters
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+    
+    # Side-by-side columns
+    col_naive, col_multiagent = st.columns(2)
+    
+    # ===== LEFT: NAIVE BASELINE =====
+    with col_naive:
+        st.markdown('''
+        <div class="panel-title naive-title">
+            ❌ Naive Baseline
+        </div>
+        <div class="panel-subtitle">
+            Single LLM call • No reasoning • No validation
+        </div>
+        ''', unsafe_allow_html=True)
+        
+        # Status badge
+        status_class = f"naive-status-{naive_display['badge_type']}"
+        st.markdown(f'''
+        <span class="naive-status-badge {status_class}">{naive_display['status_label']}</span>
+        ''', unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Generated SQL
+        st.markdown("**Generated SQL:**")
+        if naive_display['sql'] and naive_display['sql'] != "No SQL generated":
+            st.code(naive_display['sql'], language="sql")
+        else:
+            st.error("Failed to generate SQL")
+        
+        # Error message (if any)
+        if naive_display['error']:
+            st.error(f"**Error:** {naive_display['error']}")
+        
+        # Results preview
+        if naive_display['is_success'] and naive_display['data_preview']:
+            st.markdown(f"**Results:** {naive_display['row_count']} rows")
+            import pandas as pd
+            df = pd.DataFrame(naive_display['data_preview'])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        elif naive_display['is_success']:
+            st.info("Query executed but returned 0 rows")
+        
+        # Limitations callout
+        with st.expander("⚠️ Naive Approach Limitations", expanded=False):
+            st.markdown("""
+            - **No schema reasoning**: Doesn't explore relationships
+            - **No clarification**: Guesses on ambiguous terms
+            - **No validation**: Syntax errors hit the database
+            - **No self-correction**: Fails permanently on first error
+            """)
+    
+    # ===== RIGHT: MULTI-AGENT SYSTEM =====
+    with col_multiagent:
+        st.markdown('''
+        <div class="panel-title multiagent-title">
+            ✅ Multi-Agent System
+        </div>
+        <div class="panel-subtitle">
+            12 agents • Schema reasoning • Self-correcting
+        </div>
+        ''', unsafe_allow_html=True)
+        
+        # Status badge (special handling for meta-queries)
+        if response.is_meta_query:
+            st.markdown('<span class="naive-status-badge naive-status-success">✅ Meta Query Resolved</span>', unsafe_allow_html=True)
+        else:
+            status = response.reasoning_trace.final_status
+            if status == ExecutionStatus.SUCCESS:
+                st.markdown('<span class="naive-status-badge naive-status-success">✅ Success</span>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<span class="naive-status-badge naive-status-error">❌ {status.value}</span>', unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Generated SQL (special handling for meta-queries)
+        st.markdown("**Generated SQL:**")
+        if response.is_meta_query:
+            st.info("ℹ️ Intent-aware meta-query handling – no SQL execution by design")
+            st.caption("The system explicitly reasons about schema without querying SQLite internals.")
+        elif response.sql_used and response.sql_used != "No SQL needed (meta query)":
+            st.code(response.sql_used, language="sql")
+        else:
+            st.info("No SQL needed (meta query)")
+        
+        # Answer
+        st.markdown("**Answer:**")
+        st.success(response.answer[:500] if response.answer else "No answer generated")
+        
+        # Results count (only for non-meta queries)
+        if not response.is_meta_query and response.data_preview:
+            st.markdown(f"**Results:** {len(response.data_preview)} rows")
+            import pandas as pd
+            df = pd.DataFrame(response.data_preview[:5])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        # Advantages callout
+        with st.expander("✨ Multi-Agent Advantages", expanded=False):
+            st.markdown("""
+            - **Schema exploration**: Understands table relationships
+            - **Clarification**: Resolves ambiguous terms automatically
+            - **Safety validation**: Blocks destructive queries
+            - **Self-correction**: Retries with better SQL on errors
+            """)
+    
+    st.markdown("---")
+
+
+# ============================================================
 # RESULT PANEL (MERGED: Answer + SQL + Metrics)
 # ============================================================
 
@@ -845,14 +1161,18 @@ def render_result_panel(response: FinalResponse):
     trace = response.reasoning_trace
     status = trace.final_status
     
-    # Status badge
-    status_config = {
-        ExecutionStatus.SUCCESS: ("✅ Success", "status-success"),
-        ExecutionStatus.EMPTY: ("📭 Empty Result", "status-empty"),
-        ExecutionStatus.ERROR: ("❌ Error", "status-error"),
-        ExecutionStatus.BLOCKED: ("🛡️ Blocked", "status-error"),
-    }
-    status_text, status_class = status_config.get(status, ("❓ Unknown", "status-empty"))
+    # Status badge (special handling for meta-queries)
+    if response.is_meta_query:
+        status_text = "✅ Meta Query Resolved"
+        status_class = "status-success"
+    else:
+        status_config = {
+            ExecutionStatus.SUCCESS: ("✅ Success", "status-success"),
+            ExecutionStatus.EMPTY: ("📭 Empty Result", "status-empty"),
+            ExecutionStatus.ERROR: ("❌ Error", "status-error"),
+            ExecutionStatus.BLOCKED: ("🛡️ Blocked", "status-error"),
+        }
+        status_text, status_class = status_config.get(status, ("❓ Unknown", "status-empty"))
     
     # Hero Result Card
     st.markdown(f'''
@@ -892,10 +1212,15 @@ def render_result_panel(response: FinalResponse):
     ''', unsafe_allow_html=True)
     
     # SQL Section (collapsible)
-    with st.expander("📝 **View Generated SQL**", expanded=False):
-        if trace.correction_attempts > 0:
-            st.warning(f"🔄 Self-corrected {trace.correction_attempts} time(s)")
-        st.code(response.sql_used, language="sql")
+    if response.is_meta_query:
+        with st.expander("ℹ️ **No SQL Generated**", expanded=False):
+            st.info("Schema introspection – no SQL execution required")
+            st.caption("This query was resolved through intent-aware meta-query handling.")
+    else:
+        with st.expander("📝 **View Generated SQL**", expanded=False):
+            if trace.correction_attempts > 0:
+                st.warning(f"🔄 Self-corrected {trace.correction_attempts} time(s)")
+            st.code(response.sql_used, language="sql")
     
     # Warnings
     if response.warnings:
@@ -912,8 +1237,10 @@ def render_reasoning_panel(response: FinalResponse):
     Unified reasoning panel with:
     - Visual agent map at top
     - Detailed execution steps showing ALL 12 agents (executed or skipped)
+    - Judge Mode: Shows only key steps by default, expandable for full details
     """
     trace = response.reasoning_trace
+    judge_mode = st.session_state.get('judge_mode', True)
     
     # Visual Agent Map
     st.markdown("#### 🗺️ Pipeline Overview")
@@ -921,27 +1248,62 @@ def render_reasoning_panel(response: FinalResponse):
     
     st.markdown("---")
     
-    # Detailed Execution Steps - Show ALL 12 agents
-    st.markdown("#### 📋 Detailed Execution Steps (All 12 Agents)")
-    st.caption("Showing all agents in pipeline - executed and skipped")
-    
-    # Create a map of executed agents
-    executed_agents = {action.agent_name: action for action in trace.actions}
-    
-    # Show all 12 agents in order
-    step_num = 1
-    for agent_info in AGENT_PIPELINE:
-        agent_name = agent_info["name"]
+    # Judge Mode vs Full Mode toggle is in sidebar
+    if judge_mode:
+        # JUDGE MODE: Highlight key steps only
+        st.markdown("#### 🎯 Key Decision Points (Judge Mode)")
+        st.caption("Showing the most important agents. Toggle 'Judge Mode' in sidebar for full details.")
         
-        # Check if this agent was executed
-        if agent_name in executed_agents:
-            # Agent was executed - show full details
-            render_step_card(step_num, executed_agents[agent_name])
-        else:
-            # Agent was skipped - show placeholder
-            render_skipped_agent(step_num, agent_info)
+        # Create a map of executed agents
+        executed_agents = {action.agent_name: action for action in trace.actions}
         
-        step_num += 1
+        # Show only key agents
+        step_num = 1
+        for agent_info in AGENT_PIPELINE:
+            agent_name = agent_info["name"]
+            
+            # Only show key agents in Judge Mode
+            if agent_name not in KEY_AGENTS_FOR_JUDGES:
+                continue
+            
+            if agent_name in executed_agents:
+                render_step_card(step_num, executed_agents[agent_name], compact=True)
+            else:
+                render_skipped_agent(step_num, agent_info)
+            
+            step_num += 1
+        
+        # Expandable section for full trace
+        with st.expander("📋 Show Full 12-Agent Trace", expanded=False):
+            step_num = 1
+            for agent_info in AGENT_PIPELINE:
+                agent_name = agent_info["name"]
+                
+                if agent_name in executed_agents:
+                    render_step_card(step_num, executed_agents[agent_name], compact=False)
+                else:
+                    render_skipped_agent(step_num, agent_info)
+                
+                step_num += 1
+    else:
+        # FULL MODE: Show all 12 agents
+        st.markdown("#### 📋 Detailed Execution Steps (All 12 Agents)")
+        st.caption("Showing all agents in pipeline - executed and skipped")
+        
+        # Create a map of executed agents
+        executed_agents = {action.agent_name: action for action in trace.actions}
+        
+        # Show all 12 agents in order
+        step_num = 1
+        for agent_info in AGENT_PIPELINE:
+            agent_name = agent_info["name"]
+            
+            if agent_name in executed_agents:
+                render_step_card(step_num, executed_agents[agent_name], compact=False)
+            else:
+                render_skipped_agent(step_num, agent_info)
+            
+            step_num += 1
     
     # Legend
     st.markdown("---")
@@ -952,13 +1314,93 @@ def render_reasoning_panel(response: FinalResponse):
 
 
 # ============================================================
-# SIDEBAR (Enhanced with Query Categories)
+# SIDEBAR (Enhanced with Demo Mode, Judge Mode, Query Categories)
 # ============================================================
 
 def render_sidebar():
     with st.sidebar:
         st.markdown("## 🧠 NL2SQL")
         st.caption("Multi-Agent System")
+        
+        st.markdown("---")
+        
+        # ===== DEMO MODE SECTION =====
+        st.markdown("### 🎮 Demo Mode")
+        
+        demo_mode = st.toggle("Enable Demo Mode", value=st.session_state.demo_mode, 
+                              help="Run 5 preset queries showcasing system capabilities")
+        st.session_state.demo_mode = demo_mode
+        
+        if demo_mode:
+            st.success("Demo Mode Active")
+            st.caption("5 curated queries ready to demonstrate the system")
+            
+            # Show demo queries as buttons
+            for i, demo in enumerate(DEMO_QUERIES):
+                col1, col2 = st.columns([0.8, 0.2])
+                with col1:
+                    if st.button(f"{i+1}. {demo['category']}", key=f"demo_{i}", use_container_width=True):
+                        st.session_state.current_query = demo['query']
+                        st.session_state.demo_index = i
+                        st.rerun()
+                with col2:
+                    st.caption(f"#{i+1}")
+            
+            st.caption(f"Query {st.session_state.demo_index + 1}/5 selected")
+        
+        st.markdown("---")
+        
+        # ===== JUDGE MODE SECTION =====
+        st.markdown("### 🎯 Judge Mode")
+        
+        judge_mode = st.toggle("Judge Mode (Simplified)", value=st.session_state.judge_mode,
+                               help="Show only key decision points. Disable for full 12-agent trace.")
+        st.session_state.judge_mode = judge_mode
+        
+        if judge_mode:
+            st.info("Showing key agents only")
+            st.caption("IntentAnalyzer → SchemaExplorer → QueryPlanner → SafetyValidator → ResponseSynthesizer")
+        else:
+            st.warning("Full trace mode")
+            st.caption("All 12 agents visible")
+        
+        st.markdown("---")
+        
+        # ===== COMPARISON MODE SECTION =====
+        st.markdown("### ⚖️ Comparison Mode")
+        
+        compare_naive = st.toggle("Compare with Naive NL→SQL", value=st.session_state.compare_naive,
+                                   help="Show side-by-side: single-shot baseline vs multi-agent system")
+        st.session_state.compare_naive = compare_naive
+        
+        if compare_naive:
+            st.warning("Comparison Active")
+            st.caption("Shows WHY multi-agent reasoning matters")
+        else:
+            st.caption("Enable to see naive baseline failures")
+        
+        st.markdown("---")
+        
+        # ===== PROVIDER STATUS =====
+        st.markdown("### 🤖 LLM Status")
+        
+        provider_status = st.session_state.get('provider_status', 'primary')
+        query_count = st.session_state.get('query_count_this_minute', 0)
+        
+        if provider_status == 'primary':
+            st.success("✅ Primary Provider (Gemini)")
+        elif provider_status == 'fallback':
+            st.warning("⚠️ Using Fallback (Groq)")
+            st.caption("Primary provider quota exceeded")
+        else:
+            st.error("❌ Both providers exhausted")
+        
+        # Rate limit indicator
+        rate_color = "green" if query_count < 3 else "orange" if query_count < 4 else "red"
+        st.markdown(f"**Queries this minute:** :{rate_color}[{query_count}/4]")
+        
+        if query_count >= 3:
+            st.caption("⚠️ Approaching rate limit")
         
         st.markdown("---")
         
@@ -970,44 +1412,45 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # Try These Queries - Categorized
-        st.markdown("### 🎯 Try These Queries")
-        
-        query_categories = {
-            "📊 Simple": [
-                "Show me all customers",
-                "List all artists",
-            ],
-            "🔍 Meta": [
-                "What tables exist?",
-                "Show me the schema",
-            ],
-            "📈 Aggregate": [
-                "How many tracks are there?",
-                "Total revenue by country",
-            ],
-            "🔗 Join": [
-                "Top 5 artists by tracks",
-                "Customer purchases by genre",
-            ],
-            "❓ Ambiguous": [
-                "Show me recent orders",
-                "Popular items",
-            ],
-            "🧩 Complex": [
-                "Top customers with most purchases",
-                "Artists with no albums",
-            ]
-        }
-        
-        for category, queries in query_categories.items():
-            with st.expander(f"**{category}**", expanded=False):
-                for q in queries:
-                    if st.button(q, key=f"cat_{hash(category + q)}", use_container_width=True):
-                        st.session_state.current_query = q
-                        st.rerun()
-        
-        st.markdown("---")
+        # Try These Queries - Categorized (when not in demo mode)
+        if not demo_mode:
+            st.markdown("### 🎯 Try These Queries")
+            
+            query_categories = {
+                "📊 Simple": [
+                    "Show me all customers",
+                    "List all artists",
+                ],
+                "🔍 Meta": [
+                    "What tables exist?",
+                    "Show me the schema",
+                ],
+                "📈 Aggregate": [
+                    "How many tracks are there?",
+                    "Total revenue by country",
+                ],
+                "🔗 Join": [
+                    "Top 5 artists by tracks",
+                    "Customer purchases by genre",
+                ],
+                "❓ Ambiguous": [
+                    "Show me recent orders",
+                    "Popular items",
+                ],
+                "🧩 Complex": [
+                    "Top customers with most purchases",
+                    "Artists with no albums",
+                ]
+            }
+            
+            for category, queries in query_categories.items():
+                with st.expander(f"**{category}**", expanded=False):
+                    for q in queries:
+                        if st.button(q, key=f"cat_{hash(category + q)}", use_container_width=True):
+                            st.session_state.current_query = q
+                            st.rerun()
+            
+            st.markdown("---")
         
         # Recent Queries
         if st.session_state.history:
@@ -1026,19 +1469,12 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # Display Settings
-        st.markdown("### ⚙️ Display Settings")
-        st.caption("Theme: Light Mode")
-        st.caption("Auto-refresh: Off")
-        
-        st.markdown("---")
-        
         # Technical Details
         st.markdown("### 🔧 Technical Details")
         st.caption("Database: Chinook SQLite")
-        st.caption("LLM: Groq Llama 3.3")
+        st.caption("LLM: Gemini + Groq fallback")
         st.caption("Framework: CrewAI")
-        st.caption("Rate Limit: 5 req/min")
+        st.caption("Safe Rate: 4 req/min")
 
 
 # ============================================================
@@ -1058,13 +1494,28 @@ def main():
     </div>
     ''', unsafe_allow_html=True)
     
+    # ===== DEMO MODE BANNER =====
+    if st.session_state.demo_mode:
+        demo = DEMO_QUERIES[st.session_state.demo_index]
+        st.info(f"""
+        **🎮 Demo Mode Active** | Query {st.session_state.demo_index + 1}/5: **{demo['category']}**
+        
+        *{demo['description']}*
+        """)
+    
     # ===== QUERY INPUT =====
     col1, col2 = st.columns([6, 1])
     
     with col1:
+        # Pre-fill with demo query if in demo mode
+        default_query = st.session_state.current_query
+        if st.session_state.demo_mode and not default_query:
+            default_query = DEMO_QUERIES[st.session_state.demo_index]['query']
+            st.session_state.current_query = default_query
+        
         query = st.text_input(
             label="Query",
-            value=st.session_state.current_query,
+            value=default_query,
             placeholder="Ask anything about your database...",
             label_visibility="collapsed",
             disabled=st.session_state.is_processing
@@ -1074,8 +1525,13 @@ def main():
         run = st.button("🚀 Run", type="primary", use_container_width=True,
                        disabled=st.session_state.is_processing or not query)
     
+    # ===== RATE LIMIT CHECK =====
+    can_run, rate_msg = check_rate_limit()
+    if not can_run:
+        st.warning(rate_msg)
+    
     # ===== PROCESSING =====
-    if run and query:
+    if run and query and can_run:
         st.session_state.is_processing = True
         st.session_state.current_query = query
         
@@ -1097,10 +1553,31 @@ def main():
                 time.sleep(0.1)
         
         try:
+            # ===== RUN NAIVE BASELINE (if comparison mode is ON) =====
+            if st.session_state.compare_naive:
+                naive_progress = st.empty()
+                with naive_progress.container():
+                    st.markdown("#### ⚡ Running naive baseline (single LLM call)...")
+                naive_result = run_naive_query(query)
+                st.session_state.naive_result = naive_result
+                naive_progress.empty()
+            else:
+                st.session_state.naive_result = None
+            
+            # ===== RUN MULTI-AGENT SYSTEM =====
             orchestrator = get_orchestrator()
             response = orchestrator.process_query(query)
             
             progress.empty()
+            
+            # Update rate limit counter
+            update_rate_limit()
+            
+            # Check if fallback was used (from response metadata if available)
+            if hasattr(response, 'execution_metrics') and response.execution_metrics:
+                if response.execution_metrics.get('fallback_used'):
+                    st.session_state.provider_status = 'fallback'
+                    st.warning("⚠️ Primary provider quota exceeded. Switched to fallback provider (Groq).")
             
             st.session_state.last_response = response
             st.session_state.history.append({
@@ -1109,9 +1586,23 @@ def main():
                 'status': response.reasoning_trace.final_status.value
             })
             
+            # Auto-advance demo mode
+            if st.session_state.demo_mode:
+                if st.session_state.demo_index < len(DEMO_QUERIES) - 1:
+                    st.toast(f"✅ Demo {st.session_state.demo_index + 1}/5 complete!")
+            
         except Exception as e:
             progress.empty()
-            st.error(f"❌ {str(e)}")
+            error_msg = str(e).lower()
+            
+            # Handle quota/rate limit errors gracefully
+            if "quota" in error_msg or "rate limit" in error_msg or "429" in error_msg:
+                st.session_state.provider_status = 'fallback'
+                st.error("⚠️ **Provider Quota Exceeded**")
+                st.warning("The primary LLM provider has hit its rate limit. Please wait a moment and try again, or the system will automatically switch to the fallback provider.")
+            else:
+                st.error(f"❌ {str(e)}")
+            
             st.session_state.is_processing = False
             return
         
@@ -1124,6 +1615,10 @@ def main():
         
         st.markdown("---")
         
+        # Show comparison panel if comparison mode is active
+        if st.session_state.compare_naive and st.session_state.naive_result:
+            render_naive_comparison_panel()
+        
         # TWO MERGED TABS (instead of 5)
         tab_result, tab_reasoning = st.tabs(["📦 **Result**", "🧠 **Reasoning & Workflow**"])
         
@@ -1132,12 +1627,27 @@ def main():
         
         with tab_reasoning:
             render_reasoning_panel(response)
+        
+        # Demo Mode: Next query button
+        if st.session_state.demo_mode and st.session_state.demo_index < len(DEMO_QUERIES) - 1:
+            st.markdown("---")
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button("➡️ Next Demo Query", type="primary", use_container_width=True):
+                    st.session_state.demo_index += 1
+                    st.session_state.current_query = DEMO_QUERIES[st.session_state.demo_index]['query']
+                    st.session_state.last_response = None
+                    st.rerun()
     
     # ===== FOOTER =====
     st.markdown("---")
-    st.markdown('''
+    mode_text = "Demo Mode" if st.session_state.demo_mode else "Interactive Mode"
+    judge_text = "Judge View" if st.session_state.judge_mode else "Full Trace"
+    compare_text = " | ⚖️ Comparison" if st.session_state.compare_naive else ""
+    st.markdown(f'''
     <div style="text-align: center; color: #334155; font-size: 0.8rem; padding: 1rem;">
-        Built with CrewAI • 12 Agents • 4-6 LLM Calls • Full Transparency
+        Built with CrewAI • 12 Agents • 4-6 LLM Calls • Full Transparency<br>
+        <span style="color: #667eea;">{mode_text} | {judge_text}{compare_text}</span>
     </div>
     ''', unsafe_allow_html=True)
 

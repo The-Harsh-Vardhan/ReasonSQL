@@ -205,3 +205,4 @@ class FinalResponse(BaseModel):
     data_preview: Optional[List[Dict[str, Any]]] = Field(default=None, description="Preview of result data")
     row_count: int = Field(default=0, description="Total rows returned")
     warnings: List[str] = Field(default_factory=list, description="Any warnings to show user")
+    is_meta_query: bool = Field(default=False, description="Whether this was a meta-query (schema introspection)")

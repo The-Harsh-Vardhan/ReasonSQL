@@ -405,11 +405,26 @@ class BatchOptimizedOrchestrator:
                 self._log(f"  ✓ {llm_response.provider.value.upper()} call successful")
             
             # Parse JSON
-            # Extract JSON from markdown code blocks if present
+            # Extract JSON from response (handle various formats)
             if "```json" in content:
+                # Markdown code block format
                 content = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
+                # Generic code block
                 content = content.split("```")[1].split("```")[0].strip()
+            else:
+                # Try to extract JSON object from plain text
+                # Look for the first { and last }
+                if "{" in content and "}" in content:
+                    start_idx = content.find("{")
+                    end_idx = content.rfind("}") + 1
+                    content = content[start_idx:end_idx].strip()
+            
+            # Check if content is empty before parsing
+            if not content or content.strip() == "":
+                self._log(f"  ✗ Empty response from LLM")
+                self._log(f"  Raw response: {llm_response.content[:500]}...")
+                raise LLMError("LLM returned empty response")
             
             result = json.loads(content)
             
@@ -418,18 +433,14 @@ class BatchOptimizedOrchestrator:
         
         except json.JSONDecodeError as e:
             self._log(f"  ✗ JSON parse error: {e}")
-            self._log(f"  Raw response: {content[:200]}...")
-            raise
+            self._log(f"  Raw content attempted to parse: '{content[:500]}'...")
+            self._log(f"  Full LLM response: '{llm_response.content[:500]}'...")
+            raise LLMError(f"Failed to parse JSON from LLM response: {e}")
         except LLMError as e:
-            self._log(f"  ✗ Both providers failed: {e}")
+            self._log(f"  ✗ LLM error: {e}")
             raise
-        
         except Exception as e:
             self._log(f"  ✗ Unexpected error: {e}")
-            raise
-            raise
-        except Exception as e:
-            self._log(f"  ✗ LLM call failed: {e}")
             raise
     
     # ============================================================
@@ -831,9 +842,15 @@ Return JSON:
         """Build final response."""
         total_time = time.time() * 1000 - state.start_time_ms
         
+        # Check if this is a meta-query
+        is_meta = state.intent == "META_QUERY"
+        
         # Determine status
         if state.execution_error:
             status = ExecutionStatus.ERROR
+        elif is_meta:
+            # Meta-queries are ALWAYS successful (schema introspection)
+            status = ExecutionStatus.SUCCESS
         elif state.row_count == 0 and not state.execution_error:
             status = ExecutionStatus.EMPTY
         else:
@@ -861,6 +878,10 @@ Return JSON:
         
         sql_used = state.corrected_sql if state.corrected_sql else state.generated_sql
         
+        # For meta-queries, explicitly mark SQL as not needed
+        if is_meta:
+            sql_used = "No SQL needed (meta query)"
+        
         self._log(f"{'='*60}")
         self._log(f"COMPLETED: {state.llm_calls_made} LLM calls, {total_time:.0f}ms")
         self._log(f"Rate Limit Status: {self.rate_limiter.get_status()}")
@@ -879,7 +900,8 @@ Return JSON:
             sql_used=sql_used,
             row_count=state.row_count,
             reasoning_trace=trace,
-            warnings=state.validation_warnings
+            warnings=state.validation_warnings,
+            is_meta_query=is_meta
         )
     
     def _abort(self, state: BatchPipelineState, reason: str) -> FinalResponse:
