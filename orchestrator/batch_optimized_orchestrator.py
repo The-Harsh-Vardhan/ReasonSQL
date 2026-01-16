@@ -60,6 +60,7 @@ from datetime import datetime, timedelta
 from config import DATABASE_PATH, VERBOSE, DEFAULT_LIMIT, FORBIDDEN_KEYWORDS
 from models import FinalResponse, ExecutionStatus, ReasoningTrace, AgentAction
 from .llm_client import create_llm_client, LLMError, LLMProvider
+from tools.schema_graph import SchemaGraph
 
 
 # ============================================================
@@ -170,6 +171,7 @@ class BatchPipelineState:
     # Deterministic: Safety & Execution
     safety_approved: bool = False
     safety_violations: List[str] = field(default_factory=list)
+    fk_violations: List[str] = field(default_factory=list)  # FK-specific violations for self-correction
     execution_result: Optional[List] = None
     execution_error: str = ""
     row_count: int = 0
@@ -236,6 +238,8 @@ class BatchOptimizedOrchestrator:
         self.verbose = verbose
         self.llm = create_llm_client(primary="gemini", fallback="groq", verbose=verbose)
         self.rate_limiter = RateLimiter(max_requests=5, window_seconds=60)
+        # Build schema graph once for FK validation
+        self.schema_graph = SchemaGraph.from_database(DATABASE_PATH)
     
     def _log(self, message: str):
         if self.verbose:
@@ -296,6 +300,30 @@ class BatchOptimizedOrchestrator:
             self._log("→ SafetyValidator [Deterministic]")
             state = self._deterministic_safety_validation(state)
             
+            # If FK violations detected, trigger self-correction immediately
+            if state.fk_violations:
+                self._log(f"→ FK VIOLATIONS detected: {len(state.fk_violations)} issues")
+                
+                retry_loop = 0
+                while retry_loop <= state.max_retries:
+                    # Try self-correction
+                    self._log(f"→ BATCH 3: FK Self-Correction [LLM] (attempt {retry_loop + 1})")
+                    state = self._batch_3_self_correction(state)
+                    
+                    # Re-validate corrected SQL
+                    state = self._deterministic_safety_validation(state)
+                    
+                    if state.safety_approved:
+                        self._log("→ FK correction successful")
+                        break
+                    
+                    if retry_loop < state.max_retries:
+                        retry_loop += 1
+                        state.retry_count = retry_loop
+                    else:
+                        self._log("→ Max FK correction attempts reached")
+                        return self._abort(state, f"FK violations persist after {state.max_retries} attempts: {state.fk_violations}")
+            
             if not state.safety_approved:
                 return self._abort(state, f"Safety violations: {state.safety_violations}")
             
@@ -316,7 +344,9 @@ class BatchOptimizedOrchestrator:
                     # Re-validate corrected SQL
                     state = self._deterministic_safety_validation(state)
                     if not state.safety_approved:
-                        return self._abort(state, "Corrected SQL failed safety check")
+                        violations_detail = "; ".join(state.safety_violations)
+                        self._log(f"→ Corrected SQL still has violations: {violations_detail}")
+                        return self._abort(state, f"Corrected SQL failed safety check: {violations_detail}")
                     
                     retry_loop += 1
                     state.retry_count = retry_loop
@@ -406,6 +436,8 @@ class BatchOptimizedOrchestrator:
             
             # Parse JSON
             # Extract JSON from response (handle various formats)
+            original_content = content  # Keep original for debugging
+            
             if "```json" in content:
                 # Markdown code block format
                 content = content.split("```json")[1].split("```")[0].strip()
@@ -423,10 +455,39 @@ class BatchOptimizedOrchestrator:
             # Check if content is empty before parsing
             if not content or content.strip() == "":
                 self._log(f"  ✗ Empty response from LLM")
-                self._log(f"  Raw response: {llm_response.content[:500]}...")
+                self._log(f"  Raw response: {original_content[:500]}...")
                 raise LLMError("LLM returned empty response")
             
-            result = json.loads(content)
+            # Try to parse JSON with automatic fixing
+            try:
+                result = json.loads(content)
+            except json.JSONDecodeError as e:
+                # Try to fix common JSON issues
+                self._log(f"  ⚠️ JSON parse error, attempting auto-fix...")
+                
+                # Fix 1: Remove trailing commas (common LLM mistake)
+                fixed_content = content.replace(",]", "]").replace(",}", "}")
+                
+                # Fix 2: Replace single quotes with double quotes (if that's the issue)
+                if "'" in fixed_content and '"' not in fixed_content:
+                    fixed_content = fixed_content.replace("'", '"')
+                
+                # Fix 3: Remove comments (some LLMs add // comments)
+                import re
+                fixed_content = re.sub(r'//.*?\n', '\n', fixed_content)
+                
+                try:
+                    result = json.loads(fixed_content)
+                    self._log(f"  ✓ Auto-fix successful!")
+                except json.JSONDecodeError:
+                    # Still failed, log details and raise
+                    self._log(f"  ✗ JSON parse error: {e}")
+                    self._log(f"  Error at position {e.pos}: {e.msg}")
+                    self._log(f"  Content around error: '{content[max(0, e.pos-50):min(len(content), e.pos+50)]}'")
+                    self._log(f"  Full content attempted to parse: '{content[:1000]}'...")
+                    self._log(f"  Original LLM response: '{original_content[:1000]}'...")
+                    raise LLMError(f"Failed to parse JSON from LLM response: {e}")
+
             
             self._log(f"  ✓ API call successful (Total: {state.llm_calls_made}, Remaining: {self.rate_limiter.get_status()['remaining']})")
             return result
@@ -603,9 +664,18 @@ Return JSON in this EXACT format:
         return state
     
     def _deterministic_safety_validation(self, state: BatchPipelineState) -> BatchPipelineState:
-        """SafetyValidator: Rule-based SQL safety checks."""
+        """
+        SafetyValidator: Rule-based SQL safety checks + FK JOIN validation.
+        
+        Validates:
+        1. No forbidden keywords (INSERT, DELETE, DROP, etc.)
+        2. LIMIT clause present
+        3. No SELECT *
+        4. JOIN conditions match actual FK relationships (CRITICAL)
+        """
         sql = state.corrected_sql if state.corrected_sql else state.generated_sql
         violations = []
+        fk_violations = []
         
         # Check forbidden keywords
         sql_upper = sql.upper()
@@ -621,10 +691,41 @@ Return JSON in this EXACT format:
         if "SELECT *" in sql_upper or "SELECT*" in sql_upper:
             violations.append("SELECT * is forbidden")
         
-        state.safety_approved = len(violations) == 0
-        state.safety_violations = violations
+        # CRITICAL: Validate all JOIN conditions against schema FK relationships
+        join_conditions = self.schema_graph.get_all_joins_in_sql(sql)
         
-        status = "✓ APPROVED" if state.safety_approved else f"✗ REJECTED: {violations}"
+        if join_conditions:
+            for join_cond in join_conditions:
+                is_valid, error_msg = self.schema_graph.validate_join_condition(join_cond)
+                
+                if not is_valid:
+                    fk_violations.append(error_msg)
+                    
+                    # Extract table names for suggestion
+                    import re
+                    pattern = r'(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)'
+                    match = re.search(pattern, join_cond, re.IGNORECASE)
+                    if match:
+                        table1, _, table2, _ = match.groups()
+                        suggestion = self.schema_graph.suggest_correct_joins(table1, table2)
+                        fk_violations.append(f"Suggestion: {suggestion}")
+        
+        # Combine all violations
+        all_violations = violations + fk_violations
+        
+        state.safety_approved = len(all_violations) == 0
+        state.safety_violations = all_violations
+        
+        # Store FK violations separately for self-correction
+        state.fk_violations = fk_violations
+        
+        if state.safety_approved:
+            status = "✓ APPROVED (all safety checks passed)"
+        elif fk_violations:
+            status = f"✗ FK VIOLATION: {len(fk_violations)} invalid JOIN(s)"
+        else:
+            status = f"✗ REJECTED: {violations}"
+        
         state.add_trace("SafetyValidator", status, sql[:100])
         
         return state
@@ -727,22 +828,51 @@ Return JSON:
     # ============================================================
     
     def _batch_3_self_correction(self, state: BatchPipelineState) -> BatchPipelineState:
-        """Single LLM call for SelfCorrectionAgent (only on error)."""
-        prompt = f"""You are SelfCorrectionAgent. The SQL query failed. Analyze and fix it.
+        """Single LLM call for SelfCorrectionAgent (handles execution errors AND FK violations)."""
+        
+        # Determine if this is a FK violation or execution error
+        if state.fk_violations:
+            error_context = f"FK SCHEMA VIOLATION: {'; '.join(state.fk_violations)}"
+            failed_sql = state.generated_sql
+        elif state.safety_violations:
+            error_context = f"SAFETY VIOLATIONS: {'; '.join(state.safety_violations)}"
+            failed_sql = state.corrected_sql if state.corrected_sql else state.generated_sql
+        else:
+            error_context = f"EXECUTION ERROR: {state.execution_error}"
+            failed_sql = state.generated_sql
+        
+        prompt = f"""You are SelfCorrectionAgent. The SQL query has issues. Analyze and fix it.
 
 ORIGINAL QUERY: {state.resolved_query}
-FAILED SQL: {state.generated_sql}
-ERROR: {state.execution_error}
+FAILED SQL: {failed_sql}
+{error_context}
 SCHEMA: {state.schema_context}
 
-Analyze the error and generate corrected SQL.
+SAFETY RULES (MANDATORY - ALL corrections MUST follow these):
+1. ALWAYS include LIMIT clause (default: {DEFAULT_LIMIT})
+2. NEVER use SELECT * - specify column names explicitly
+3. Only SELECT statements allowed (no INSERT, UPDATE, DELETE, DROP)
+
+CRITICAL: If the error mentions FK (foreign key) violations:
+- The JOIN condition violates the database schema's foreign key relationships
+- You MUST use the suggested FK path provided in the error message
+- Example: If joining Artist to Track, you need intermediate table Album:
+  WRONG: Artist.ArtistId = Track.AlbumId (violates FK)
+  RIGHT: Artist JOIN Album ON Artist.ArtistId = Album.ArtistId JOIN Track ON Album.AlbumId = Track.AlbumId
+
+If the error mentions SAFETY violations:
+- Missing LIMIT: Add "LIMIT {DEFAULT_LIMIT}" at the end
+- SELECT *: Replace with explicit column names
+- Forbidden keywords: Rewrite to use only SELECT
+
+Analyze the error and generate corrected SQL that passes ALL safety checks.
 
 Return JSON:
 {{
   "self_correction": {{
-    "analysis": "what went wrong",
-    "corrected_sql": "fixed SQL query",
-    "changes_made": "what you changed"
+    "analysis": "what went wrong (especially FK/safety violations)",
+    "corrected_sql": "fixed SQL query with proper FK paths AND safety compliance",
+    "changes_made": "what you changed (especially JOIN corrections and safety fixes)"
   }}
 }}
 """
@@ -758,8 +888,14 @@ Return JSON:
         state.correction_analysis = corr_data.get("analysis", "")
         state.corrected_sql = corr_data.get("corrected_sql", "")
         
+        # Enhanced trace for FK corrections
+        if state.fk_violations:
+            trace_summary = f"FK CORRECTION (Retry {state.retry_count + 1}): {state.correction_analysis}"
+        else:
+            trace_summary = f"Retry {state.retry_count + 1}: {state.correction_analysis}"
+        
         state.add_trace("SelfCorrectionAgent",
-                       f"Retry {state.retry_count + 1}: {state.correction_analysis}",
+                       trace_summary,
                        state.corrected_sql)
         
         return state

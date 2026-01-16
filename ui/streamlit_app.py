@@ -8,7 +8,7 @@ DESIGN CHANGES (v3 - Demo Ready):
 4. MERGED TABS - "📦 Result" and "🧠 Reasoning" only
 5. JUDGE-FRIENDLY - Get the system in 5 seconds
 6. DEMO MODE - 5 preset queries with auto-run option
-7. JUDGE MODE - Collapsed reasoning by default, key steps highlighted
+7. SIMPLE MODE - Collapsed reasoning by default, key steps highlighted
 8. RATE LIMIT PROTECTION - Prevents demo failures
 """
 import streamlit as st
@@ -59,8 +59,8 @@ DEMO_QUERIES = [
     }
 ]
 
-# Key agents to highlight in Judge Mode
-KEY_AGENTS_FOR_JUDGES = [
+# Key agents to highlight in Simple Mode
+KEY_AGENTS_FOR_SIMPLE_MODE = [
     "IntentAnalyzer",
     "SchemaExplorer", 
     "QueryPlanner",
@@ -765,7 +765,7 @@ def init_session_state():
         'demo_mode': False,
         'demo_index': 0,
         'demo_running': False,
-        # Judge Mode additions
+        # Simple Mode additions
         'judge_mode': True,  # ON by default for cleaner presentation
         # Rate limiting
         'last_query_time': None,
@@ -864,15 +864,15 @@ def render_step_card(step_num: int, action: AgentAction, compact: bool = False):
     2. OUTPUT (what the agent produced)
     3. REASONING (why/how it made decisions)
     
-    compact: If True, shows abbreviated view for Judge Mode
+    compact: If True, shows abbreviated view for Simple Mode
     """
     # Determine if LLM or rule-based
     is_llm = any(p["name"] in action.agent_name and p["is_llm"] for p in AGENT_PIPELINE)
     emoji = "🧠" if is_llm else "📦"
     badge_text = "LLM Agent" if is_llm else "Rule-Based"
     
-    # Check if this is a key agent (highlight in Judge Mode)
-    is_key_agent = action.agent_name in KEY_AGENTS_FOR_JUDGES
+    # Check if this is a key agent (highlight in Simple Mode)
+    is_key_agent = action.agent_name in KEY_AGENTS_FOR_SIMPLE_MODE
     
     # Extract content with fallbacks - show data as-is from backend
     input_text = action.input_summary if action.input_summary else "Not applicable"
@@ -897,7 +897,7 @@ def render_step_card(step_num: int, action: AgentAction, compact: bool = False):
             st.caption(f":{badge_color}[{badge_text}]")
         
         if compact:
-            # COMPACT MODE for Judge Mode - single line summary
+            # COMPACT MODE for Simple Mode - single line summary
             with st.container(border=True):
                 col1, col2 = st.columns([1, 2])
                 with col1:
@@ -1237,7 +1237,7 @@ def render_reasoning_panel(response: FinalResponse):
     Unified reasoning panel with:
     - Visual agent map at top
     - Detailed execution steps showing ALL 12 agents (executed or skipped)
-    - Judge Mode: Shows only key steps by default, expandable for full details
+    - Simple Mode: Shows only key steps by default, expandable for full details
     """
     trace = response.reasoning_trace
     judge_mode = st.session_state.get('judge_mode', True)
@@ -1248,11 +1248,11 @@ def render_reasoning_panel(response: FinalResponse):
     
     st.markdown("---")
     
-    # Judge Mode vs Full Mode toggle is in sidebar
+    # Simple Mode vs Full Mode toggle is in sidebar
     if judge_mode:
-        # JUDGE MODE: Highlight key steps only
-        st.markdown("#### 🎯 Key Decision Points (Judge Mode)")
-        st.caption("Showing the most important agents. Toggle 'Judge Mode' in sidebar for full details.")
+        # SIMPLE MODE: Highlight key steps only
+        st.markdown("#### 🎯 Key Decision Points (Simple Mode)")
+        st.caption("Showing the most important agents. Toggle 'Simple Mode' in sidebar for full details.")
         
         # Create a map of executed agents
         executed_agents = {action.agent_name: action for action in trace.actions}
@@ -1262,8 +1262,8 @@ def render_reasoning_panel(response: FinalResponse):
         for agent_info in AGENT_PIPELINE:
             agent_name = agent_info["name"]
             
-            # Only show key agents in Judge Mode
-            if agent_name not in KEY_AGENTS_FOR_JUDGES:
+            # Only show key agents in Simple Mode
+            if agent_name not in KEY_AGENTS_FOR_SIMPLE_MODE:
                 continue
             
             if agent_name in executed_agents:
@@ -1314,7 +1314,7 @@ def render_reasoning_panel(response: FinalResponse):
 
 
 # ============================================================
-# SIDEBAR (Enhanced with Demo Mode, Judge Mode, Query Categories)
+# SIDEBAR (Enhanced with Demo Mode, Simple Mode, Query Categories)
 # ============================================================
 
 def render_sidebar():
@@ -1350,10 +1350,10 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # ===== JUDGE MODE SECTION =====
-        st.markdown("### 🎯 Judge Mode")
+        # ===== SIMPLE MODE SECTION =====
+        st.markdown("### 🎯 Simple Mode")
         
-        judge_mode = st.toggle("Judge Mode (Simplified)", value=st.session_state.judge_mode,
+        judge_mode = st.toggle("Simple Mode (Streamlined)", value=st.session_state.judge_mode,
                                help="Show only key decision points. Disable for full 12-agent trace.")
         st.session_state.judge_mode = judge_mode
         
@@ -1642,7 +1642,7 @@ def main():
     # ===== FOOTER =====
     st.markdown("---")
     mode_text = "Demo Mode" if st.session_state.demo_mode else "Interactive Mode"
-    judge_text = "Judge View" if st.session_state.judge_mode else "Full Trace"
+    judge_text = "Simple View" if st.session_state.judge_mode else "Full Trace"
     compare_text = " | ⚖️ Comparison" if st.session_state.compare_naive else ""
     st.markdown(f'''
     <div style="text-align: center; color: #334155; font-size: 0.8rem; padding: 1rem;">
