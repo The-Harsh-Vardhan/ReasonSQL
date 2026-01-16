@@ -1,48 +1,21 @@
 """
-NL2SQL Multi-Agent System - Streamlit Web UI
+NL2SQL Multi-Agent System - Streamlit Web UI (Refactored)
 
-This UI demonstrates the full transparency of the multi-agent reasoning pipeline.
-It shows judges exactly HOW the system works, not just WHAT it produces.
-
-DESIGN PHILOSOPHY:
-- Reasoning transparency > Visual polish
-- Every agent decision is visible
-- The UI explains the system as it runs
-
-UI SECTIONS:
-A. Query Input Panel - Text input + Run button
-B. Live Workflow Timeline - Shows agent execution progress
-C. Reasoning Trace - Expandable view of each agent's decisions
-D. SQL & Execution Panel - Generated SQL with retry diff
-E. Final Answer Panel - Human-readable response
-F. System Metrics - LLM calls, time, retries
-
-ORCHESTRATOR INTERFACE ASSUMPTION:
-    orchestrator.process_query(query: str) -> FinalResponse
-    
-    FinalResponse contains:
-    - answer: str
-    - sql_used: str  
-    - reasoning_trace: ReasoningTrace
-    - row_count: int
-    - warnings: List[str]
-    
-    ReasoningTrace contains:
-    - user_query: str
-    - actions: List[AgentAction]
-    - total_time_ms: float
-    - correction_attempts: int
-    - final_status: ExecutionStatus
+DESIGN CHANGES (v2):
+1. LIGHT THEME - Clean white/gray with soft gradients
+2. VISUAL AGENT MAP - Horizontal flow showing 12 agents as cards
+3. FLASHY BUT LOW-TEXT - Icons, badges, short labels over paragraphs  
+4. MERGED TABS - "📦 Result" and "🧠 Reasoning" only
+5. JUDGE-FRIENDLY - Get the system in 5 seconds
 """
 import streamlit as st
 import sys
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from dataclasses import dataclass
 from enum import Enum
 
-# Add parent directory to path for imports
+# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orchestrator import QuotaOptimizedOrchestrator
@@ -50,339 +23,409 @@ from models import ExecutionStatus, FinalResponse, ReasoningTrace, AgentAction
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
     page_title="NL2SQL Multi-Agent System",
     page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  # Collapsed for cleaner look
 )
 
 
 # ============================================================
-# CUSTOM CSS STYLING
+# LIGHT THEME CSS - Modern, clean, visual
 # ============================================================
 
 st.markdown("""
 <style>
-    /* ===== MAIN HEADER ===== */
-    .main-header {
-        font-size: 2.2rem;
-        font-weight: 700;
-        background: linear-gradient(90deg, #1E88E5, #7B1FA2);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+    /* ===== GLOBAL LIGHT THEME ===== */
+    .stApp {
+        background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+    }
+    
+    /* ===== HERO HEADER ===== */
+    .hero-header {
         text-align: center;
-        margin-bottom: 0.5rem;
+        padding: 1.5rem 0;
+        margin-bottom: 1rem;
     }
     
-    .sub-header {
-        font-size: 1.1rem;
-        color: #666;
-        text-align: center;
-        margin-bottom: 1.5rem;
+    .hero-title {
+        font-size: 2.5rem;
+        font-weight: 800;
+        color: #dc2626;
+        margin-bottom: 0.3rem;
     }
     
-    /* ===== AGENT TIMELINE STEPS ===== */
-    .agent-step {
-        padding: 0.8rem 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 0.5rem;
-        border-left: 4px solid #ccc;
-        background-color: #f8f9fa;
-        transition: all 0.3s ease;
+    .hero-subtitle {
+        font-size: 1rem;
+        color: #1e293b;
+        font-weight: 500;
     }
     
-    .agent-step-pending {
-        border-left-color: #E0E0E0;
-        background-color: #FAFAFA;
-        opacity: 0.6;
-    }
-    
-    .agent-step-running {
-        border-left-color: #FFC107;
-        background-color: #FFF8E1;
-        box-shadow: 0 2px 8px rgba(255, 193, 7, 0.3);
-        animation: pulse 1.5s infinite;
-    }
-    
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.7; }
-        100% { opacity: 1; }
-    }
-    
-    .agent-step-done {
-        border-left-color: #4CAF50;
-        background-color: #E8F5E9;
-    }
-    
-    .agent-step-failed {
-        border-left-color: #F44336;
-        background-color: #FFEBEE;
-    }
-    
-    .agent-step-retry {
-        border-left-color: #FF9800;
-        background-color: #FFF3E0;
-    }
-    
-    .agent-step-skipped {
-        border-left-color: #9E9E9E;
-        background-color: #FAFAFA;
-        opacity: 0.5;
-        font-style: italic;
-    }
-    
-    /* ===== STATUS BADGES ===== */
-    .status-badge {
+    .hero-badge {
         display: inline-block;
-        padding: 0.15rem 0.5rem;
-        border-radius: 1rem;
-        font-size: 0.7rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 0.4rem 1rem;
+        border-radius: 2rem;
+        font-size: 0.8rem;
         font-weight: 600;
-        margin-left: 0.5rem;
-        vertical-align: middle;
+        margin-top: 0.8rem;
+    }
+    
+    /* ===== AGENT MAP FLOW ===== */
+    .agent-map {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 1rem;
+        overflow-x: auto;
+        background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+        border-radius: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .agent-node {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-width: 70px;
+        padding: 0.6rem 0.4rem;
+        border-radius: 0.75rem;
+        transition: all 0.3s ease;
+        cursor: default;
+    }
+    
+    .agent-node-done {
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+        border: 2px solid #10b981;
+        box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);
+    }
+    
+    .agent-node-running {
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        border: 2px solid #f59e0b;
+        box-shadow: 0 2px 12px rgba(245, 158, 11, 0.3);
+        animation: glow 1.5s ease-in-out infinite;
+    }
+    
+    @keyframes glow {
+        0%, 100% { box-shadow: 0 2px 12px rgba(245, 158, 11, 0.3); }
+        50% { box-shadow: 0 4px 20px rgba(245, 158, 11, 0.5); }
+    }
+    
+    .agent-node-pending {
+        background: #f1f5f9;
+        border: 2px solid #cbd5e1;
+        opacity: 0.5;
+    }
+    
+    .agent-node-skipped {
+        background: #f1f5f9;
+        border: 2px dashed #94a3b8;
+        opacity: 0.4;
+    }
+    
+    .agent-emoji {
+        font-size: 1.4rem;
+        margin-bottom: 0.2rem;
+    }
+    
+    .agent-label {
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: #0f172a;
+        text-align: center;
+        line-height: 1.1;
+    }
+    
+    .agent-type-badge {
+        font-size: 0.5rem;
+        padding: 0.1rem 0.3rem;
+        border-radius: 0.5rem;
+        margin-top: 0.2rem;
     }
     
     .badge-llm {
-        background-color: #E3F2FD;
-        color: #1565C0;
-        border: 1px solid #90CAF9;
+        background: #dbeafe;
+        color: #1d4ed8;
     }
     
-    .badge-no-llm {
-        background-color: #F3E5F5;
-        color: #7B1FA2;
-        border: 1px solid #CE93D8;
+    .badge-rule {
+        background: #f3e8ff;
+        color: #7c3aed;
     }
     
-    /* ===== ANSWER BOXES ===== */
-    .answer-success {
-        background: linear-gradient(135deg, #E8F5E9, #C8E6C9);
-        border-left: 5px solid #4CAF50;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        font-size: 1.1rem;
-        margin: 1rem 0;
+    .flow-arrow {
+        color: #475569;
+        font-size: 1.2rem;
+        margin: 0 0.1rem;
     }
     
-    .answer-empty {
-        background: linear-gradient(135deg, #FFF8E1, #FFECB3);
-        border-left: 5px solid #FFC107;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-    }
-    
-    .answer-error {
-        background: linear-gradient(135deg, #FFEBEE, #FFCDD2);
-        border-left: 5px solid #F44336;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-    }
-    
-    .answer-blocked {
-        background: linear-gradient(135deg, #EFEBE9, #D7CCC8);
-        border-left: 5px solid #795548;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-    }
-    
-    /* ===== INFO BOXES ===== */
-    .info-box {
-        background-color: #E3F2FD;
-        border-left: 4px solid #1976D2;
-        padding: 0.8rem 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    
-    .warning-box {
-        background-color: #FFF3E0;
-        border-left: 4px solid #F57C00;
-        padding: 0.8rem 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    
-    /* ===== PROGRESS BAR ===== */
-    .quota-bar {
-        height: 1.5rem;
+    /* ===== RESULT HERO CARD ===== */
+    .result-hero {
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        border: 1px solid #e2e8f0;
         border-radius: 1rem;
-        overflow: hidden;
-        background-color: #E0E0E0;
-        margin: 0.5rem 0;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
     }
     
-    .quota-fill {
-        height: 100%;
+    .result-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 1rem;
+        border-radius: 2rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+    }
+    
+    .status-success {
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+        color: #047857;
+    }
+    
+    .status-empty {
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        color: #b45309;
+    }
+    
+    .status-error {
+        background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+        color: #b91c1c;
+    }
+    
+    .result-answer {
+        font-size: 1.3rem;
+        font-weight: 600;
+        color: #0f172a;
+        line-height: 1.5;
+    }
+    
+    /* ===== STAT CARDS ===== */
+    .stat-row {
+        display: flex;
+        gap: 0.75rem;
+        margin: 1rem 0;
+        flex-wrap: wrap;
+    }
+    
+    .stat-card {
+        flex: 1;
+        min-width: 100px;
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 0.75rem;
+        padding: 0.75rem;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+    }
+    
+    .stat-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #dc2626;
+    }
+    
+    .stat-label {
+        font-size: 0.7rem;
+        color: #0f172a;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 700;
+    }
+    
+    /* ===== SQL CARD ===== */
+    .sql-card {
+        background: #1e293b;
+        border-radius: 0.75rem;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .sql-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    
+    .sql-label {
+        color: #e2e8f0;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        font-weight: 600;
+    }
+    
+    /* ===== TIMELINE STEP ===== */
+    .timeline-step {
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 0.75rem;
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 0.75rem;
+        margin-bottom: 0.5rem;
+        transition: all 0.2s ease;
+    }
+    
+    .timeline-step:hover {
+        border-color: #667eea;
+        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.1);
+    }
+    
+    .timeline-icon {
+        font-size: 1.5rem;
+        width: 40px;
+        height: 40px;
         display: flex;
         align-items: center;
         justify-content: center;
-        color: white;
-        font-weight: bold;
-        font-size: 0.85rem;
-        transition: width 0.5s ease;
+        border-radius: 0.5rem;
     }
     
-    /* ===== HIDE STREAMLIT BRANDING ===== */
+    .timeline-icon-done {
+        background: #d1fae5;
+    }
+    
+    .timeline-icon-skip {
+        background: #f1f5f9;
+        opacity: 0.5;
+    }
+    
+    .timeline-content {
+        flex: 1;
+    }
+    
+    .timeline-title {
+        font-weight: 700;
+        color: #0f172a;
+        font-size: 0.9rem;
+    }
+    
+    .timeline-output {
+        font-size: 0.8rem;
+        color: #334155;
+        margin-top: 0.25rem;
+        font-weight: 500;
+    }
+    
+    /* ===== HIDE DEFAULTS ===== */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
+    .stDeployButton {display: none;}
     
-    /* ===== EXPANDER STYLING ===== */
-    .streamlit-expanderHeader {
-        font-weight: 600;
+    /* ===== INPUT STYLING ===== */
+    .stTextInput > div > div > input {
+        border-radius: 0.75rem;
+        border: 2px solid #e2e8f0;
+        padding: 0.75rem 1rem;
         font-size: 1rem;
     }
     
-    /* ===== TIMELINE CONNECTOR ===== */
-    .timeline-connector {
-        width: 2px;
-        height: 20px;
-        background-color: #E0E0E0;
-        margin-left: 1rem;
+    .stTextInput > div > div > input:focus {
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    
+    /* ===== BUTTON STYLING ===== */
+    .stButton > button {
+        border-radius: 0.75rem;
+        font-weight: 600;
+        padding: 0.5rem 1.5rem;
+        transition: all 0.2s ease;
+    }
+    
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border: none;
+    }
+    
+    .stButton > button[kind="primary"]:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+    
+    /* ===== TAB STYLING ===== */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.5rem;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 0.5rem;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+    }
+    
+    /* ===== EXPANDER STYLING ===== */
+    .streamlit-expanderHeader {
+        background: #f8fafc;
+        border-radius: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# DATA MODELS FOR UI STATE
+# DATA MODELS
 # ============================================================
 
-class AgentStepStatus(Enum):
-    """Visual status of each agent step in the pipeline."""
+class AgentStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"
     DONE = "done"
-    FAILED = "failed"
-    RETRY = "retry"
     SKIPPED = "skipped"
 
 
-# ============================================================
-# AGENT PIPELINE DEFINITION
-# The 12-agent pipeline with metadata for UI rendering
-# ============================================================
+# Simplified agent pipeline for visual map (6 main stages)
+AGENT_MAP_STAGES = [
+    {"key": "intent", "emoji": "🎯", "label": "Intent", "agents": ["IntentAnalyzer", "ClarificationAgent"], "is_llm": True},
+    {"key": "schema", "emoji": "📊", "label": "Schema", "agents": ["SchemaExplorer"], "is_llm": False},
+    {"key": "plan", "emoji": "📝", "label": "Plan", "agents": ["QueryDecomposer", "QueryPlanner", "DataExplorer"], "is_llm": True},
+    {"key": "generate", "emoji": "⚙️", "label": "Generate", "agents": ["SQLGenerator"], "is_llm": True},
+    {"key": "validate", "emoji": "🛡️", "label": "Safety", "agents": ["SafetyValidator"], "is_llm": False},
+    {"key": "execute", "emoji": "🚀", "label": "Execute", "agents": ["SQLExecutor", "SelfCorrection", "ResultValidator"], "is_llm": False},
+    {"key": "respond", "emoji": "💬", "label": "Respond", "agents": ["ResponseSynthesizer"], "is_llm": True},
+]
 
+# Full 12-agent pipeline for detailed view
 AGENT_PIPELINE = [
-    {
-        "name": "IntentAnalyzer",
-        "short": "Intent",
-        "desc": "Classifies query type (DATA/META/AMBIGUOUS)",
-        "is_llm": True,
-        "emoji": "🎯",
-        "consolidated_with": "ClarificationAgent"
-    },
-    {
-        "name": "ClarificationAgent",
-        "short": "Clarify",
-        "desc": "Resolves vague terms (recent, best, top)",
-        "is_llm": True,
-        "emoji": "❓",
-        "consolidated_with": "IntentAnalyzer"
-    },
-    {
-        "name": "SchemaExplorer",
-        "short": "Schema",
-        "desc": "Explores database tables & columns",
-        "is_llm": False,
-        "emoji": "📊",
-        "consolidated_with": None
-    },
-    {
-        "name": "QueryDecomposer",
-        "short": "Decompose",
-        "desc": "Breaks complex queries into steps",
-        "is_llm": True,
-        "emoji": "🔨",
-        "consolidated_with": "QueryPlanner"
-    },
-    {
-        "name": "DataExplorer",
-        "short": "Data",
-        "desc": "Samples data for context",
-        "is_llm": False,
-        "emoji": "🔍",
-        "consolidated_with": None
-    },
-    {
-        "name": "QueryPlanner",
-        "short": "Plan",
-        "desc": "Designs query strategy (joins, filters)",
-        "is_llm": True,
-        "emoji": "📝",
-        "consolidated_with": "QueryDecomposer"
-    },
-    {
-        "name": "SQLGenerator",
-        "short": "Generate",
-        "desc": "Generates valid SQLite SQL",
-        "is_llm": True,
-        "emoji": "⚙️",
-        "consolidated_with": None
-    },
-    {
-        "name": "SafetyValidator",
-        "short": "Safety",
-        "desc": "Validates SQL is read-only & safe",
-        "is_llm": False,
-        "emoji": "🛡️",
-        "consolidated_with": None
-    },
-    {
-        "name": "SQLExecutor",
-        "short": "Execute",
-        "desc": "Executes query against database",
-        "is_llm": False,
-        "emoji": "🚀",
-        "consolidated_with": None
-    },
-    {
-        "name": "SelfCorrection",
-        "short": "Correct",
-        "desc": "Fixes errors, retries failed queries",
-        "is_llm": True,
-        "emoji": "🔄",
-        "consolidated_with": None
-    },
-    {
-        "name": "ResultValidator",
-        "short": "Validate",
-        "desc": "Checks for anomalies in results",
-        "is_llm": False,
-        "emoji": "✓",
-        "consolidated_with": None
-    },
-    {
-        "name": "ResponseSynthesizer",
-        "short": "Respond",
-        "desc": "Generates human-readable answer",
-        "is_llm": True,
-        "emoji": "💬",
-        "consolidated_with": None
-    },
+    {"name": "IntentAnalyzer", "short": "Intent", "emoji": "🎯", "is_llm": True},
+    {"name": "ClarificationAgent", "short": "Clarify", "emoji": "❓", "is_llm": True},
+    {"name": "SchemaExplorer", "short": "Schema", "emoji": "📊", "is_llm": False},
+    {"name": "QueryDecomposer", "short": "Decompose", "emoji": "🔨", "is_llm": True},
+    {"name": "DataExplorer", "short": "Data", "emoji": "🔍", "is_llm": False},
+    {"name": "QueryPlanner", "short": "Plan", "emoji": "📝", "is_llm": True},
+    {"name": "SQLGenerator", "short": "SQL", "emoji": "⚙️", "is_llm": True},
+    {"name": "SafetyValidator", "short": "Safety", "emoji": "🛡️", "is_llm": False},
+    {"name": "SQLExecutor", "short": "Execute", "emoji": "🚀", "is_llm": False},
+    {"name": "SelfCorrection", "short": "Fix", "emoji": "🔄", "is_llm": True},
+    {"name": "ResultValidator", "short": "Check", "emoji": "✓", "is_llm": False},
+    {"name": "ResponseSynthesizer", "short": "Answer", "emoji": "💬", "is_llm": True},
 ]
 
 
 # ============================================================
-# SESSION STATE MANAGEMENT
+# SESSION STATE
 # ============================================================
 
 def init_session_state():
-    """Initialize all session state variables for the app."""
     defaults = {
-        'history': [],              # Query history
-        'orchestrator': None,       # Cached orchestrator instance
-        'current_query': "",        # Current query text
-        'is_processing': False,     # Processing lock
-        'last_response': None,      # Last query response
-        'show_all_agents': True,    # Show skipped agents toggle
+        'history': [],
+        'orchestrator': None,
+        'current_query': "",
+        'is_processing': False,
+        'last_response': None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -390,13 +433,8 @@ def init_session_state():
 
 
 def get_orchestrator() -> QuotaOptimizedOrchestrator:
-    """Get or create the orchestrator instance."""
     if st.session_state.orchestrator is None:
-        with st.spinner("🔧 Initializing 12-agent system..."):
-            st.session_state.orchestrator = QuotaOptimizedOrchestrator(
-                verbose=False,
-                max_llm_calls=8
-            )
+        st.session_state.orchestrator = QuotaOptimizedOrchestrator(verbose=False, max_llm_calls=8)
     return st.session_state.orchestrator
 
 
@@ -404,39 +442,11 @@ def get_orchestrator() -> QuotaOptimizedOrchestrator:
 # HELPER FUNCTIONS
 # ============================================================
 
-def get_status_emoji(status: AgentStepStatus) -> str:
-    """Get emoji indicator for agent step status."""
-    mapping = {
-        AgentStepStatus.PENDING: "⚪",
-        AgentStepStatus.RUNNING: "🟡",
-        AgentStepStatus.DONE: "🟢",
-        AgentStepStatus.FAILED: "🔴",
-        AgentStepStatus.RETRY: "🔁",
-        AgentStepStatus.SKIPPED: "⏭️"
-    }
-    return mapping.get(status, "⚪")
-
-
-def get_status_class(status: AgentStepStatus) -> str:
-    """Get CSS class for agent step status."""
-    mapping = {
-        AgentStepStatus.PENDING: "agent-step-pending",
-        AgentStepStatus.RUNNING: "agent-step-running",
-        AgentStepStatus.DONE: "agent-step-done",
-        AgentStepStatus.FAILED: "agent-step-failed",
-        AgentStepStatus.RETRY: "agent-step-retry",
-        AgentStepStatus.SKIPPED: "agent-step-skipped"
-    }
-    return mapping.get(status, "agent-step-pending")
-
-
 def find_agent_in_trace(agent_name: str, trace_actions: List[AgentAction]) -> Optional[Dict]:
-    """Find an agent's action in the reasoning trace."""
+    """Find agent's result in trace."""
     for action in trace_actions:
-        # Handle consolidated agent names like "IntentAnalyzer + Clar"
-        if agent_name in action.agent_name or action.agent_name.startswith(agent_name):
+        if agent_name in action.agent_name:
             return {
-                "action": action.action,
                 "output": action.output_summary,
                 "input": action.input_summary,
                 "reasoning": action.reasoning or ""
@@ -444,676 +454,337 @@ def find_agent_in_trace(agent_name: str, trace_actions: List[AgentAction]) -> Op
     return None
 
 
-def extract_llm_calls_from_trace(trace: ReasoningTrace) -> int:
-    """Extract total LLM calls from the reasoning trace."""
+def get_stage_status(stage: Dict, trace_actions: List[AgentAction]) -> AgentStatus:
+    """Determine if a stage was executed."""
+    for agent_name in stage["agents"]:
+        if find_agent_in_trace(agent_name, trace_actions):
+            return AgentStatus.DONE
+    return AgentStatus.SKIPPED
+
+
+def extract_llm_calls(trace: ReasoningTrace) -> int:
+    """Extract LLM call count from trace."""
     max_calls = 0
     for action in trace.actions:
         if action.reasoning and "LLM calls" in action.reasoning:
             try:
-                # Parse "LLM calls so far: X"
                 parts = action.reasoning.split(":")
                 if len(parts) >= 2:
-                    calls = int(parts[-1].strip())
-                    max_calls = max(max_calls, calls)
-            except (ValueError, IndexError):
+                    max_calls = max(max_calls, int(parts[-1].strip()))
+            except:
                 pass
-    return max_calls if max_calls > 0 else len([
-        a for a in trace.actions 
-        if any(p["name"] in a.agent_name and p["is_llm"] for p in AGENT_PIPELINE)
-    ])
+    return max_calls if max_calls > 0 else 4
 
 
 # ============================================================
-# UI SECTION B: LIVE WORKFLOW / AGENT TIMELINE
+# VISUAL AGENT MAP (NEW - Horizontal Flow)
 # ============================================================
 
-def render_agent_timeline(trace_actions: List[AgentAction], show_all: bool = True):
+def render_agent_map(trace_actions: List[AgentAction] = None):
     """
-    Render the complete agent execution timeline.
-    
-    Shows:
-    - Which agents ran
-    - In what order
-    - What decision each made
-    - LLM vs Rule-based distinction
-    
-    Args:
-        trace_actions: List of AgentAction from reasoning trace
-        show_all: Whether to show agents that were skipped
+    Render a horizontal visual agent map showing the pipeline flow.
+    Each stage is a node with status indicator.
     """
-    st.markdown("### 🔄 Agent Execution Pipeline")
+    html_parts = ['<div class="agent-map">']
     
-    # Explanation for judges
-    st.markdown("""
-    <div class="info-box">
-        <strong>📋 Pipeline Visualization:</strong> 
-        Each box represents an agent. 
-        <span style="color: #1565C0;">🧠 Blue badges = LLM reasoning</span>, 
-        <span style="color: #7B1FA2;">📦 Purple badges = Rule-based logic</span>.
-        Skipped agents were not needed for this query type.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Build timeline
-    for i, agent_def in enumerate(AGENT_PIPELINE, 1):
-        agent_name = agent_def["name"]
-        emoji = agent_def["emoji"]
-        desc = agent_def["desc"]
-        is_llm = agent_def["is_llm"]
-        
-        # Find this agent in the trace
-        result = find_agent_in_trace(agent_name, trace_actions)
-        
-        if result:
-            # Agent executed
-            output = result["output"]
-            if "retry" in result.get("action", "").lower() or "correction" in agent_name.lower():
-                status = AgentStepStatus.RETRY if "retry" in str(result).lower() else AgentStepStatus.DONE
-            else:
-                status = AgentStepStatus.DONE
+    for i, stage in enumerate(AGENT_MAP_STAGES):
+        # Determine status
+        if trace_actions:
+            status = get_stage_status(stage, trace_actions)
         else:
-            # Agent was skipped
-            if not show_all:
-                continue
-            status = AgentStepStatus.SKIPPED
-            output = "Not required for this query"
+            status = AgentStatus.PENDING
         
-        status_emoji = get_status_emoji(status)
-        status_class = get_status_class(status)
-        llm_label = "🧠 LLM" if is_llm else "📦 Rules"
-        llm_class = "badge-llm" if is_llm else "badge-no-llm"
+        # Status-based styling
+        node_class = {
+            AgentStatus.DONE: "agent-node-done",
+            AgentStatus.RUNNING: "agent-node-running",
+            AgentStatus.PENDING: "agent-node-pending",
+            AgentStatus.SKIPPED: "agent-node-skipped",
+        }.get(status, "agent-node-pending")
         
-        # Render agent step
-        output_html = ""
-        if output and status != AgentStepStatus.SKIPPED:
-            # Truncate long outputs
-            display_output = output[:200] + "..." if len(output) > 200 else output
-            output_html = f'<div style="margin-top: 0.5rem; font-size: 0.9rem; color: #555;">{display_output}</div>'
+        # Type badge
+        type_badge = '<span class="agent-type-badge badge-llm">LLM</span>' if stage["is_llm"] else '<span class="agent-type-badge badge-rule">Rule</span>'
         
-        st.markdown(f"""
-        <div class="agent-step {status_class}">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
-                <div>
-                    <strong>{status_emoji} Step {i}: {emoji} {agent_name}</strong>
-                    <span class="status-badge {llm_class}">{llm_label}</span>
-                </div>
-                <div style="font-size: 0.85rem; color: #666;">{desc}</div>
+        html_parts.append(f'''
+            <div class="agent-node {node_class}">
+                <span class="agent-emoji">{stage["emoji"]}</span>
+                <span class="agent-label">{stage["label"]}</span>
+                {type_badge}
             </div>
-            {output_html}
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_live_progress(placeholder, current_step: int, total_steps: int = 12):
-    """
-    Render live progress during query execution.
-    Updates the placeholder with current agent being processed.
-    """
-    progress_pct = current_step / total_steps
+        ''')
+        
+        # Add arrow between nodes (not after last)
+        if i < len(AGENT_MAP_STAGES) - 1:
+            html_parts.append('<span class="flow-arrow">→</span>')
     
-    with placeholder.container():
-        st.progress(progress_pct)
-        
-        if current_step <= len(AGENT_PIPELINE):
-            agent = AGENT_PIPELINE[current_step - 1]
-            st.markdown(f"""
-            <div class="agent-step agent-step-running">
-                <strong>🟡 Currently Running: {agent['emoji']} {agent['name']}</strong>
-                <div style="font-size: 0.9rem; color: #666; margin-top: 0.3rem;">
-                    {agent['desc']}...
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    html_parts.append('</div>')
+    st.markdown(''.join(html_parts), unsafe_allow_html=True)
 
 
 # ============================================================
-# UI SECTION C: REASONING TRACE (EXPANDABLE)
+# RESULT PANEL (MERGED: Answer + SQL + Metrics)
 # ============================================================
 
-def render_reasoning_trace(response: FinalResponse):
+def render_result_panel(response: FinalResponse):
     """
-    Render detailed reasoning trace with expandable sections.
-    
-    Each agent section shows:
-    - WHY the agent ran
-    - WHAT decision it made
-    - KEY inputs and outputs
+    Unified result panel with:
+    - Hero answer card at top
+    - Compact metrics row
+    - Collapsible SQL
     """
     trace = response.reasoning_trace
+    status = trace.final_status
     
-    st.markdown("### 🧠 Detailed Reasoning Trace")
+    # Status badge
+    status_config = {
+        ExecutionStatus.SUCCESS: ("✅ Success", "status-success"),
+        ExecutionStatus.EMPTY: ("📭 Empty Result", "status-empty"),
+        ExecutionStatus.ERROR: ("❌ Error", "status-error"),
+        ExecutionStatus.BLOCKED: ("🛡️ Blocked", "status-error"),
+    }
+    status_text, status_class = status_config.get(status, ("❓ Unknown", "status-empty"))
     
-    # Explanation
-    st.markdown("""
-    <div class="info-box">
-        <strong>💡 Transparency:</strong> 
-        Expand any step to see the agent's reasoning process.
-        This is NOT a black box - every decision is explainable.
+    # Hero Result Card
+    st.markdown(f'''
+    <div class="result-hero">
+        <div class="result-status {status_class}">{status_text}</div>
+        <div class="result-answer">{response.answer}</div>
     </div>
-    """, unsafe_allow_html=True)
+    ''', unsafe_allow_html=True)
     
-    if not trace.actions:
-        st.info("No reasoning trace available.")
-        return
+    # Compact Metrics Row
+    llm_calls = extract_llm_calls(trace)
+    time_ms = trace.total_time_ms or 0
     
-    for i, action in enumerate(trace.actions, 1):
-        # Determine if this is an LLM agent
-        is_llm = any(
-            p["name"] in action.agent_name and p["is_llm"]
-            for p in AGENT_PIPELINE
-        )
-        agent_icon = "🧠" if is_llm else "📦"
-        agent_type = "LLM Reasoning" if is_llm else "Rule-based"
-        
-        with st.expander(f"Step {i}: {agent_icon} {action.agent_name}", expanded=(i == 1)):
-            # Two-column layout for input/output
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown(f"**🏷️ Agent Type:** {agent_type}")
-                st.markdown("**🎬 Action Performed:**")
-                st.info(action.action if action.action else "Standard agent execution")
-                
-                if action.input_summary:
-                    st.markdown("**📥 Input Context:**")
-                    st.text_area(
-                        "Input", 
-                        action.input_summary, 
-                        height=100, 
-                        disabled=True,
-                        label_visibility="collapsed",
-                        key=f"input_{i}"
-                    )
-            
-            with col2:
-                st.markdown("**📤 Output Produced:**")
-                st.success(action.output_summary if action.output_summary else "Completed")
-                
-                if action.reasoning:
-                    st.markdown("**🤔 Internal Reasoning:**")
-                    st.warning(action.reasoning)
-
-
-# ============================================================
-# UI SECTION D: SQL & EXECUTION PANEL
-# ============================================================
-
-def render_sql_panel(response: FinalResponse):
-    """
-    Render SQL panel with syntax highlighting.
-    Shows original vs corrected SQL if retries occurred.
-    """
-    trace = response.reasoning_trace
-    
-    st.markdown("### 📝 Generated SQL")
-    
-    # Check for self-correction
-    if trace.correction_attempts > 0:
-        st.markdown(f"""
-        <div class="warning-box">
-            <strong>🔄 Self-Correction Applied:</strong> 
-            The system detected an issue and automatically retried 
-            ({trace.correction_attempts} attempt{'s' if trace.correction_attempts > 1 else ''}).
+    st.markdown(f'''
+    <div class="stat-row">
+        <div class="stat-card">
+            <div class="stat-value">⏱️ {time_ms:.0f}ms</div>
+            <div class="stat-label">Time</div>
         </div>
-        """, unsafe_allow_html=True)
-        
-        # Try to find original SQL in trace for comparison
-        original_sqls = []
-        for action in trace.actions:
-            if "SQLGenerator" in action.agent_name:
-                sql_match = action.output_summary
-                if sql_match and sql_match not in original_sqls:
-                    original_sqls.append(sql_match)
-        
-        if len(original_sqls) > 1:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**❌ Original (Failed):**")
-                # Show SQL from the original (may be in summary)
-                st.code(original_sqls[0] if "SQL:" in original_sqls[0] else "See trace for details", language="sql")
-            with col2:
-                st.markdown("**✅ Corrected (Success):**")
-                st.code(response.sql_used, language="sql")
-        else:
-            st.code(response.sql_used, language="sql")
-    else:
+        <div class="stat-card">
+            <div class="stat-value">🧠 {llm_calls}/8</div>
+            <div class="stat-label">LLM Calls</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">🔄 {trace.correction_attempts}</div>
+            <div class="stat-label">Retries</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">📋 {response.row_count}</div>
+            <div class="stat-label">Rows</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">📦 {len(trace.actions)}</div>
+            <div class="stat-label">Steps</div>
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+    
+    # SQL Section (collapsible)
+    with st.expander("📝 **View Generated SQL**", expanded=False):
+        if trace.correction_attempts > 0:
+            st.warning(f"🔄 Self-corrected {trace.correction_attempts} time(s)")
         st.code(response.sql_used, language="sql")
     
-    # Execution status with visual indicator
-    status = trace.final_status
-    
-    if status == ExecutionStatus.SUCCESS:
-        st.success(f"✅ **Execution Successful** — {response.row_count} row(s) returned")
-    elif status == ExecutionStatus.EMPTY:
-        st.info("📭 **Query executed but returned 0 rows** — The query is valid but no data matches")
-    elif status == ExecutionStatus.ERROR:
-        st.error("❌ **Execution Failed** — See reasoning trace for error details")
-    elif status == ExecutionStatus.BLOCKED:
-        st.error("🛡️ **Query Blocked** — Safety validation prevented execution")
-    elif status == ExecutionStatus.VALIDATION_FAILED:
-        st.warning("⚠️ **Validation Failed** — Query did not pass all checks")
-
-
-# ============================================================
-# UI SECTION E: FINAL ANSWER PANEL
-# ============================================================
-
-def render_answer_panel(response: FinalResponse):
-    """
-    Render the final human-readable answer.
-    Styled based on execution status.
-    """
-    trace = response.reasoning_trace
-    status = trace.final_status
-    
-    st.markdown("### 💡 Answer")
-    
-    # Status-specific styling
-    if status == ExecutionStatus.SUCCESS:
-        st.markdown(f"""
-        <div class="answer-success">
-            <div style="font-size: 0.85rem; color: #2E7D32; margin-bottom: 0.5rem;">✅ SUCCESS</div>
-            <div style="font-size: 1.1rem;">{response.answer}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    elif status == ExecutionStatus.EMPTY:
-        st.markdown(f"""
-        <div class="answer-empty">
-            <div style="font-size: 0.85rem; color: #F57C00; margin-bottom: 0.5rem;">📭 EMPTY RESULT</div>
-            <div style="font-size: 1.1rem;">{response.answer}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    elif status == ExecutionStatus.BLOCKED:
-        st.markdown(f"""
-        <div class="answer-blocked">
-            <div style="font-size: 0.85rem; color: #5D4037; margin-bottom: 0.5rem;">🛡️ BLOCKED</div>
-            <div style="font-size: 1.1rem;">{response.answer}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    else:  # ERROR or other
-        st.markdown(f"""
-        <div class="answer-error">
-            <div style="font-size: 0.85rem; color: #C62828; margin-bottom: 0.5rem;">❌ ERROR</div>
-            <div style="font-size: 1.1rem;">{response.answer}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Show warnings if any
+    # Warnings
     if response.warnings:
-        st.markdown("**⚠️ Warnings:**")
-        for warning in response.warnings:
-            st.warning(warning)
+        for w in response.warnings:
+            st.warning(w)
 
 
 # ============================================================
-# UI SECTION F: SYSTEM METRICS
+# REASONING PANEL (MERGED: Agent Map + Timeline + Details)
 # ============================================================
 
-def render_metrics(response: FinalResponse):
+def render_reasoning_panel(response: FinalResponse):
     """
-    Render execution metrics dashboard.
-    Shows LLM calls, time, retries, etc.
+    Unified reasoning panel with:
+    - Visual agent map at top
+    - Compact timeline
+    - Expandable details per agent
     """
     trace = response.reasoning_trace
     
-    st.markdown("### 📊 Execution Metrics")
+    # Visual Agent Map
+    st.markdown("#### 🗺️ Pipeline Overview")
+    render_agent_map(trace.actions)
     
-    # Extract metrics
-    llm_calls = extract_llm_calls_from_trace(trace)
-    total_agents = len(trace.actions)
-    
-    # Metrics row
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        time_val = f"{trace.total_time_ms:.0f}ms" if trace.total_time_ms else "N/A"
-        st.metric(label="⏱️ Total Time", value=time_val)
-    
-    with col2:
-        st.metric(
-            label="🧠 LLM Calls",
-            value=f"{llm_calls}/8",
-            delta="Quota-optimized" if llm_calls <= 6 else None,
-            delta_color="normal"
-        )
-    
-    with col3:
-        st.metric(
-            label="🔄 Self-Corrections",
-            value=trace.correction_attempts,
-            delta="Clean run" if trace.correction_attempts == 0 else None
-        )
-    
-    with col4:
-        st.metric(label="📋 Agent Steps", value=total_agents)
-    
-    with col5:
-        status_display = {
-            ExecutionStatus.SUCCESS: "✅ Success",
-            ExecutionStatus.EMPTY: "📭 Empty",
-            ExecutionStatus.ERROR: "❌ Error",
-            ExecutionStatus.BLOCKED: "🛡️ Blocked",
-            ExecutionStatus.VALIDATION_FAILED: "⚠️ Failed"
-        }
-        st.metric(
-            label="📊 Final Status",
-            value=status_display.get(trace.final_status, str(trace.final_status))
-        )
-    
-    # LLM Quota visualization
     st.markdown("---")
-    st.markdown("**🔋 LLM Quota Usage:**")
     
-    quota_pct = min(llm_calls / 8 * 100, 100)
-    color = "#4CAF50" if quota_pct <= 50 else "#FFC107" if quota_pct <= 75 else "#F44336"
+    # Compact Timeline
+    st.markdown("#### 📋 Execution Steps")
     
-    st.markdown(f"""
-    <div class="quota-bar">
-        <div class="quota-fill" style="width: {quota_pct}%; background-color: {color};">
-            {llm_calls}/8 calls ({100 - quota_pct:.0f}% remaining)
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    for i, action in enumerate(trace.actions, 1):
+        # Find matching pipeline info
+        is_llm = any(p["name"] in action.agent_name and p["is_llm"] for p in AGENT_PIPELINE)
+        emoji = "🧠" if is_llm else "📦"
+        
+        with st.expander(f"{emoji} **Step {i}: {action.agent_name}**", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Output:**")
+                st.success(action.output_summary[:300] if action.output_summary else "✓ Completed")
+            
+            with col2:
+                if action.reasoning:
+                    st.markdown("**Note:**")
+                    st.info(action.reasoning)
     
-    # Efficiency explanation
-    st.markdown("""
-    <div style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
-        💡 <strong>Why quota matters:</strong> 
-        Naive text-to-SQL systems make 12+ LLM calls per query. 
-        Our quota-optimized pipeline consolidates these into 4-6 calls, 
-        reducing API costs by 60% while maintaining full reasoning capability.
-    </div>
-    """, unsafe_allow_html=True)
+    # Legend
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    col1.markdown("🧠 **LLM** = AI reasoning")
+    col2.markdown("📦 **Rule** = Deterministic")
+    col3.markdown("🟢 **Done** • ⏭️ **Skipped**")
 
 
 # ============================================================
-# SIDEBAR
+# SIDEBAR (Simplified)
 # ============================================================
 
 def render_sidebar():
-    """Render sidebar with examples, history, and system info."""
     with st.sidebar:
-        # Logo/Title
-        st.markdown("""
-        <div style="text-align: center; padding: 1rem 0;">
-            <div style="font-size: 3rem;">🧠</div>
-            <div style="font-size: 1.3rem; font-weight: bold; color: #1E88E5;">NL2SQL</div>
-            <div style="font-size: 0.85rem; color: #666;">Multi-Agent System</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("## 🧠 NL2SQL")
+        st.caption("Multi-Agent System")
         
         st.markdown("---")
         
-        # What makes this different
-        st.markdown("### 🎯 What Makes This Different?")
-        st.markdown("""
-        This is **NOT** a naive prompt→SQL system.
-        
-        It uses **12 specialized agents** with:
-        - 🧠 **6 LLM agents** for reasoning
-        - 📦 **6 rule-based agents** for validation
-        - 🔄 **Self-correction** on failures
-        - 🛡️ **Safety gate** before execution
-        """)
+        # Quick stats
+        st.markdown("### ⚡ Quick Facts")
+        col1, col2 = st.columns(2)
+        col1.metric("Agents", "12")
+        col2.metric("LLM Calls", "4-6")
         
         st.markdown("---")
         
         # Example queries
-        st.markdown("### 📚 Try These Queries")
+        st.markdown("### 📚 Examples")
         
         examples = [
-            ("🔢 Simple", "How many customers are from Brazil?"),
-            ("📊 Meta", "What tables exist in this database?"),
-            ("📈 Aggregate", "Which 5 artists have the most tracks?"),
-            ("🔗 Join", "Total revenue by country, sorted highest first"),
-            ("❓ Ambiguous", "Show me recent orders"),
-            ("🧩 Complex", "Customers who never made a purchase"),
+            "How many customers from Brazil?",
+            "What tables exist?",
+            "Top 5 artists by tracks",
+            "Total revenue by country",
+            "Show me recent orders",
         ]
         
-        for label, query in examples:
-            if st.button(f"{label}", key=f"ex_{hash(query)}", use_container_width=True):
-                st.session_state.current_query = query
+        for q in examples:
+            if st.button(q[:25] + "..." if len(q) > 25 else q, key=f"ex_{hash(q)}", use_container_width=True):
+                st.session_state.current_query = q
                 st.rerun()
-            st.caption(query[:40] + "..." if len(query) > 40 else query)
         
         st.markdown("---")
         
-        # Query history
-        st.markdown("### 📜 Recent Queries")
-        
+        # History
         if st.session_state.history:
-            for item in reversed(st.session_state.history[-5:]):
-                status_icons = {
-                    "success": "✅",
-                    "empty": "📭",
-                    "error": "❌",
-                    "blocked": "🛡️"
-                }
-                icon = status_icons.get(item.get('status', ''), "❓")
-                
-                st.markdown(f"""
-                <div style="background: #f5f5f5; padding: 0.5rem; 
-                            border-radius: 0.3rem; margin-bottom: 0.5rem; 
-                            font-size: 0.85rem; border-left: 3px solid #1E88E5;">
-                    {icon} {item['query'][:35]}...
-                    <br/><small style="color: #888;">⏱️ {item['time']:.0f}ms</small>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.caption("No queries yet. Try an example!")
-        
-        st.markdown("---")
-        
-        # Settings
-        with st.expander("⚙️ Display Settings"):
-            st.session_state.show_all_agents = st.checkbox(
-                "Show skipped agents",
-                value=st.session_state.get('show_all_agents', True),
-                help="Show agents that were not needed for this query"
-            )
-        
-        # Technical details
-        with st.expander("🔧 Technical Details"):
-            st.markdown("""
-            | Component | Value |
-            |-----------|-------|
-            | Framework | CrewAI |
-            | LLM | Gemini 2.5 Flash |
-            | Database | SQLite (Chinook) |
-            | LLM Budget | 8 calls max |
-            | Max Retries | 2 |
-            """)
+            st.markdown("### 📜 History")
+            for item in reversed(st.session_state.history[-3:]):
+                icon = "✅" if item['status'] == 'success' else "📭"
+                st.caption(f"{icon} {item['query'][:30]}...")
 
 
 # ============================================================
-# MAIN APPLICATION
+# MAIN APP
 # ============================================================
 
 def main():
-    """Main application entry point."""
-    # Initialize
     init_session_state()
     render_sidebar()
     
-    # ===== HEADER =====
-    st.markdown("""
-    <div class="main-header">🧠 NL2SQL Multi-Agent System</div>
-    <div class="sub-header">
-        Intelligent Natural Language to SQL with 
-        <strong>12 Specialized Agents</strong> • 
-        Schema Reasoning • Self-Correction • Safety Validation
+    # ===== HERO HEADER =====
+    st.markdown('''
+    <div class="hero-header">
+        <div class="hero-title">🧠 NL2SQL Multi-Agent</div>
+        <div class="hero-subtitle">Natural Language → SQL with 12 Specialized AI Agents</div>
+        <div class="hero-badge">✨ Quota-Optimized • 🛡️ Safety-Validated • 🔄 Self-Correcting</div>
     </div>
-    """, unsafe_allow_html=True)
+    ''', unsafe_allow_html=True)
     
-    # Differentiator banner
-    st.markdown("""
-    <div style="background: linear-gradient(90deg, #E3F2FD, #F3E5F5); 
-                padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem; 
-                text-align: center; border: 1px solid #E0E0E0;">
-        <strong>🎯 This is NOT a naive text-to-SQL system</strong><br/>
-        <span style="font-size: 0.9rem; color: #666;">
-            Every agent decision is visible • Reasoning is transparent • 
-            Self-correction on errors • Safety-validated execution
-        </span>
-    </div>
-    """, unsafe_allow_html=True)
+    # ===== QUERY INPUT =====
+    col1, col2 = st.columns([6, 1])
     
-    # ===== SECTION A: QUERY INPUT =====
-    st.markdown("### 💬 Ask Your Question")
-    
-    col_input, col_button = st.columns([6, 1])
-    
-    with col_input:
+    with col1:
         query = st.text_input(
-            label="Enter your question",
+            label="Query",
             value=st.session_state.current_query,
-            placeholder="e.g., How many customers are from Brazil?",
+            placeholder="Ask anything about your database...",
             label_visibility="collapsed",
             disabled=st.session_state.is_processing
         )
     
-    with col_button:
-        run_button = st.button(
-            "🚀 Run",
-            type="primary",
-            use_container_width=True,
-            disabled=st.session_state.is_processing or not query
-        )
+    with col2:
+        run = st.button("🚀 Run", type="primary", use_container_width=True,
+                       disabled=st.session_state.is_processing or not query)
     
-    # ===== QUERY PROCESSING =====
-    if run_button and query:
+    # ===== PROCESSING =====
+    if run and query:
         st.session_state.is_processing = True
         st.session_state.current_query = query
         
-        # Create containers for live updates
-        status_container = st.container()
-        progress_placeholder = st.empty()
+        progress = st.empty()
         
-        with status_container:
-            st.info(f"🔄 **Processing:** \"{query}\"")
+        with progress.container():
+            # Show animated agent map during processing
+            st.markdown("#### ⏳ Processing through agent pipeline...")
+            
+            # Animated progress simulation
+            prog_bar = st.progress(0)
+            status_text = st.empty()
+            
+            steps = ["🎯 Intent", "📊 Schema", "📝 Planning", "⚙️ SQL", "🛡️ Safety", "🚀 Execute", "💬 Response"]
+            
+            for i, step in enumerate(steps):
+                prog_bar.progress((i + 1) / len(steps))
+                status_text.markdown(f"**{step}**...")
+                time.sleep(0.1)
         
         try:
             orchestrator = get_orchestrator()
-            
-            # Simulate progressive display
-            # (Real streaming would yield updates from orchestrator)
-            progress_steps = [
-                (1, "🎯 Analyzing intent..."),
-                (3, "📊 Exploring schema..."),
-                (6, "📝 Planning query..."),
-                (7, "⚙️ Generating SQL..."),
-                (8, "🛡️ Validating safety..."),
-                (9, "🚀 Executing..."),
-                (12, "💬 Synthesizing response..."),
-            ]
-            
-            with progress_placeholder.container():
-                prog_bar = st.progress(0)
-                step_display = st.empty()
-                
-                for step_num, step_text in progress_steps:
-                    prog_bar.progress(step_num / 12)
-                    step_display.markdown(f"**{step_text}**")
-                    time.sleep(0.12)
-            
-            # Execute query
-            start_time = time.time()
             response = orchestrator.process_query(query)
-            elapsed = (time.time() - start_time) * 1000
             
-            # Clear progress
-            progress_placeholder.empty()
-            status_container.empty()
+            progress.empty()
             
-            # Store response
             st.session_state.last_response = response
-            
-            # Add to history
             st.session_state.history.append({
                 'query': query,
-                'time': response.reasoning_trace.total_time_ms or elapsed,
+                'time': response.reasoning_trace.total_time_ms or 0,
                 'status': response.reasoning_trace.final_status.value
             })
             
         except Exception as e:
-            progress_placeholder.empty()
-            status_container.error(f"❌ Error: {str(e)}")
+            progress.empty()
+            st.error(f"❌ {str(e)}")
             st.session_state.is_processing = False
             return
         
         st.session_state.is_processing = False
-        st.rerun()  # Refresh to show results
+        st.rerun()
     
-    # ===== RESULTS DISPLAY =====
+    # ===== RESULTS =====
     if st.session_state.last_response:
         response = st.session_state.last_response
-        trace = response.reasoning_trace
         
         st.markdown("---")
         
-        # Create organized tabs
-        tab_answer, tab_sql, tab_pipeline, tab_reasoning, tab_metrics = st.tabs([
-            "💡 Answer",
-            "📝 SQL Query",
-            "🔄 Agent Pipeline",
-            "🧠 Reasoning Trace",
-            "📊 Metrics"
-        ])
+        # TWO MERGED TABS (instead of 5)
+        tab_result, tab_reasoning = st.tabs(["📦 **Result**", "🧠 **Reasoning & Workflow**"])
         
-        with tab_answer:
-            render_answer_panel(response)
-            
-            # Quick SQL preview
-            st.markdown("---")
-            st.markdown("**📝 SQL Used:**")
-            st.code(response.sql_used, language="sql")
-            
-            if response.row_count > 0:
-                st.caption(f"📋 {response.row_count} row(s) returned")
-        
-        with tab_sql:
-            render_sql_panel(response)
-        
-        with tab_pipeline:
-            render_agent_timeline(
-                trace.actions, 
-                show_all=st.session_state.show_all_agents
-            )
-            
-            # Legend
-            st.markdown("---")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown("🟢 **Completed** — Agent ran successfully")
-            with col2:
-                st.markdown("🔁 **Retry** — Required self-correction")
-            with col3:
-                st.markdown("⏭️ **Skipped** — Not needed for query type")
+        with tab_result:
+            render_result_panel(response)
         
         with tab_reasoning:
-            render_reasoning_trace(response)
-        
-        with tab_metrics:
-            render_metrics(response)
+            render_reasoning_panel(response)
     
     # ===== FOOTER =====
     st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #888; font-size: 0.85rem; padding: 1rem 0;">
-        🧠 <strong>NL2SQL Multi-Agent System</strong><br/>
-        Built with CrewAI • Quota-Optimized (4-6 LLM calls) • 
-        Full Reasoning Transparency<br/>
-        <span style="font-size: 0.75rem;">For demonstration and educational purposes</span>
+    st.markdown('''
+    <div style="text-align: center; color: #334155; font-size: 0.8rem; padding: 1rem;">
+        Built with CrewAI • 12 Agents • 4-6 LLM Calls • Full Transparency
     </div>
-    """, unsafe_allow_html=True)
+    ''', unsafe_allow_html=True)
 
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 
 if __name__ == "__main__":
     main()
