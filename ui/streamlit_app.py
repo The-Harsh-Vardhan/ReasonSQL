@@ -696,7 +696,7 @@ def extract_llm_calls(trace: ReasoningTrace) -> int:
 
 def render_step_card(step_num: int, action: AgentAction):
     """
-    Render a single execution step with 4-section layout:
+    Render a single execution step with 4-section layout using native Streamlit components:
     1. INPUT (what the agent received)
     2. ACTION (what the agent did)
     3. OUTPUT (what the agent produced)
@@ -705,105 +705,62 @@ def render_step_card(step_num: int, action: AgentAction):
     # Determine if LLM or rule-based
     is_llm = any(p["name"] in action.agent_name and p["is_llm"] for p in AGENT_PIPELINE)
     emoji = "🧠" if is_llm else "📦"
-    badge_class = "step-badge-llm" if is_llm else "step-badge-rule"
     badge_text = "LLM Agent" if is_llm else "Rule-Based"
     
-    # Extract content with fallbacks
+    # Extract content with fallbacks - show data as-is from backend
     input_text = action.input_summary if action.input_summary else "Not applicable"
     action_text = action.action if action.action else "Processing step"
     output_text = action.output_summary if action.output_summary else "Completed"
     reasoning_text = action.reasoning if action.reasoning else ("Deterministic step (no LLM reasoning)" if not is_llm else "No reasoning recorded")
     
-    # Truncate if too long (keep full text in expandable section)
+    # Truncate helper
     def truncate(text, limit=300):
         return text if len(text) <= limit else text[:limit] + "..."
     
-    input_display = truncate(input_text, 200)
-    input_long = len(input_text) > 200
-    
-    action_display = truncate(action_text, 150)
-    action_long = len(action_text) > 150
-    
-    output_display = truncate(output_text, 250)
-    output_long = len(output_text) > 250
-    
-    reasoning_display = truncate(reasoning_text, 400)
-    reasoning_long = len(reasoning_text) > 400
-    
-    # Render card
-    st.markdown(f'''
-    <div class="step-card">
-        <div class="step-header">
-            <div class="step-icon">{emoji}</div>
-            <div class="step-title">
-                <div class="step-title-text">Step {step_num}: {action.agent_name}</div>
-                <span class="step-badge {badge_class}">{badge_text}</span>
-            </div>
-        </div>
+    # Create step card container
+    with st.container():
+        # Header row
+        header_col1, header_col2 = st.columns([0.1, 0.9])
+        with header_col1:
+            st.markdown(f"## {emoji}")
+        with header_col2:
+            badge_color = "blue" if is_llm else "violet"
+            st.markdown(f"### Step {step_num}: {action.agent_name}")
+            st.caption(f":{badge_color}[{badge_text}]")
         
-        <div class="step-sections">
-            <!-- INPUT -->
-            <div class="step-section step-section-input">
-                <div class="step-section-header">
-                    <span class="step-section-icon">📥</span>
-                    <span class="step-section-title">Input</span>
-                </div>
-                <div class="step-section-content {"step-section-long" if input_long else ""}">
-                    {input_display}
-                </div>
-            </div>
-            
-            <!-- ACTION -->
-            <div class="step-section step-section-action">
-                <div class="step-section-header">
-                    <span class="step-section-icon">🎬</span>
-                    <span class="step-section-title">Action</span>
-                </div>
-                <div class="step-section-content {"step-section-long" if action_long else ""}">
-                    {action_display}
-                </div>
-            </div>
-            
-            <!-- OUTPUT -->
-            <div class="step-section step-section-output">
-                <div class="step-section-header">
-                    <span class="step-section-icon">📤</span>
-                    <span class="step-section-title">Output</span>
-                </div>
-                <div class="step-section-content {"step-section-long" if output_long else ""}">
-                    {output_display}
-                </div>
-            </div>
-            
-            <!-- REASONING -->
-            <div class="step-section step-section-reasoning">
-                <div class="step-section-header">
-                    <span class="step-section-icon">🤔</span>
-                    <span class="step-section-title">Reasoning</span>
-                </div>
-                <div class="step-section-content {"step-section-long" if reasoning_long else ""}">
-                    {reasoning_display}
-                </div>
-            </div>
-        </div>
-    </div>
-    ''', unsafe_allow_html=True)
-    
-    # If any section was truncated, show full version in expander
-    if input_long or action_long or output_long or reasoning_long:
-        with st.expander("🔍 View Full Details", expanded=False):
-            if input_long:
-                st.markdown("**📥 Full Input:**")
-                st.text_area("Input", input_text, height=100, label_visibility="collapsed", key=f"input_{step_num}_{hash(action.agent_name)}")
-            if action_long:
-                st.markdown("**🎬 Full Action:**")
-                st.text_area("Action", action_text, height=80, label_visibility="collapsed", key=f"action_{step_num}_{hash(action.agent_name)}")
-            if output_long:
-                st.markdown("**📤 Full Output:**")
-                st.text_area("Output", output_text, height=120, label_visibility="collapsed", key=f"output_{step_num}_{hash(action.agent_name)}")
-            if reasoning_long:
-                st.markdown("**🤔 Full Reasoning:**")
-                st.text_area("Reasoning", reasoning_text, height=150, label_visibility="collapsed", key=f"reasoning_{step_num}_{hash(action.agent_name)}")
+        # 3 Sections: Input | Output (top row), Reasoning (bottom full width)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # INPUT Section
+            st.markdown("##### 📥 Input")
+            with st.container(border=True):
+                display_text = truncate(input_text, 200)
+                st.markdown(display_text)
+                if len(input_text) > 200:
+                    with st.expander("Show full input"):
+                        st.text(input_text)
+        
+        with col2:
+            # OUTPUT Section
+            st.markdown("##### 📤 Output")
+            with st.container(border=True):
+                display_text = truncate(output_text, 250)
+                st.markdown(display_text)
+                if len(output_text) > 250:
+                    with st.expander("Show full output"):
+                        st.text(output_text)
+        
+        # REASONING Section (full width)
+        st.markdown("##### 🤔 Reasoning")
+        with st.container(border=True):
+            display_text = truncate(reasoning_text, 400)
+            st.markdown(display_text)
+            if len(reasoning_text) > 400:
+                with st.expander("Show full reasoning"):
+                    st.text(reasoning_text)
+        
+        st.divider()
 
 
 # ============================================================
