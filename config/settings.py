@@ -133,7 +133,7 @@ DATABASE_PATH = os.getenv("DATABASE_PATH", str(DATA_DIR / "chinook.db"))
 # =============================================================================
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
-LLM_MODEL = os.getenv("LLM_MODEL", "groq/llama-3.1-70b-versatile")
+LLM_MODEL = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
 
 # =============================================================================
 # SYSTEM SETTINGS

@@ -18,21 +18,32 @@ from .quota_optimized_orchestrator import (
     LLMStage,
     BudgetExceededError,
     create_quota_optimized_orchestrator,
-    run_query  # Default run_query uses quota-optimized
+    run_query as quota_run_query
+)
+from .batch_optimized_orchestrator import (
+    BatchOptimizedOrchestrator,
+    RateLimiter,
+    RateLimitExceeded,
+    run_query  # Default run_query uses batch-optimized (5 req/min hard limit)
 )
 
-# Default export: Use quota-optimized for Gemini API sustainability
-NL2SQLOrchestrator = QuotaOptimizedOrchestrator
+# Default export: Use batch-optimized for HARD rate limiting and agent batching
+NL2SQLOrchestrator = BatchOptimizedOrchestrator
 
 __all__ = [
-    # RECOMMENDED: Quota-optimized orchestrator (4-6 LLM calls vs 12)
+    # RECOMMENDED: Batch-optimized orchestrator (2-5 LLM calls, 5 req/min hard limit)
+    "BatchOptimizedOrchestrator",
+    "NL2SQLOrchestrator",  # Alias for BatchOptimizedOrchestrator
+    "RateLimiter",
+    "RateLimitExceeded",
+    "run_query",  # Default uses batch-optimized
+    # Previous quota-optimized orchestrator (4-6 LLM calls, soft limit)
     "QuotaOptimizedOrchestrator",
-    "NL2SQLOrchestrator",  # Alias for QuotaOptimizedOrchestrator
     "LLMBudget",
     "LLMStage",
     "BudgetExceededError",
     "create_quota_optimized_orchestrator",
-    "run_query",  # Default uses quota-optimized
+    "quota_run_query",
     # Deterministic orchestrator (full 12 agents, higher LLM usage)
     "DeterministicOrchestrator",
     "Step",

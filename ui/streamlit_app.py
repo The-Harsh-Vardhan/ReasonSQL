@@ -18,7 +18,7 @@ from enum import Enum
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from orchestrator import QuotaOptimizedOrchestrator
+from orchestrator import NL2SQLOrchestrator
 from models import ExecutionStatus, FinalResponse, ReasoningTrace, AgentAction
 
 
@@ -432,9 +432,9 @@ def init_session_state():
             st.session_state[key] = value
 
 
-def get_orchestrator() -> QuotaOptimizedOrchestrator:
+def get_orchestrator() -> NL2SQLOrchestrator:
     if st.session_state.orchestrator is None:
-        st.session_state.orchestrator = QuotaOptimizedOrchestrator(verbose=False, max_llm_calls=8)
+        st.session_state.orchestrator = NL2SQLOrchestrator(verbose=False)
     return st.session_state.orchestrator
 
 
@@ -603,6 +603,7 @@ def render_reasoning_panel(response: FinalResponse):
     - Visual agent map at top
     - Compact timeline
     - Expandable details per agent
+    - Provider badges showing Gemini/Groq usage
     """
     trace = response.reasoning_trace
     
@@ -624,20 +625,24 @@ def render_reasoning_panel(response: FinalResponse):
             col1, col2 = st.columns(2)
             
             with col1:
-                st.markdown("**Output:**")
-                st.success(action.output_summary[:300] if action.output_summary else "✓ Completed")
+                st.markdown("**Action:**")
+                st.info(action.action if action.action else "Processing")
             
             with col2:
-                if action.reasoning:
-                    st.markdown("**Note:**")
-                    st.info(action.reasoning)
+                st.markdown("**Output:**")
+                output_text = action.output_summary if action.output_summary else "✓ Completed"
+                st.success(output_text[:300])
+            
+            if action.reasoning:
+                st.markdown("**Reasoning:**")
+                st.caption(action.reasoning[:500])
     
     # Legend
     st.markdown("---")
     col1, col2, col3 = st.columns(3)
     col1.markdown("🧠 **LLM** = AI reasoning")
     col2.markdown("📦 **Rule** = Deterministic")
-    col3.markdown("🟢 **Done** • ⏭️ **Skipped**")
+    col3.markdown("✓ **Done** • ⏭️ **Skipped**")
 
 
 # ============================================================
