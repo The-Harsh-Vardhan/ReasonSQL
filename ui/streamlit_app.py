@@ -696,11 +696,10 @@ def extract_llm_calls(trace: ReasoningTrace) -> int:
 
 def render_step_card(step_num: int, action: AgentAction):
     """
-    Render a single execution step with 4-section layout using native Streamlit components:
+    Render a single execution step with 3-section layout using native Streamlit components:
     1. INPUT (what the agent received)
-    2. ACTION (what the agent did)
-    3. OUTPUT (what the agent produced)
-    4. REASONING (why/how it made decisions)
+    2. OUTPUT (what the agent produced)
+    3. REASONING (why/how it made decisions)
     """
     # Determine if LLM or rule-based
     is_llm = any(p["name"] in action.agent_name and p["is_llm"] for p in AGENT_PIPELINE)
@@ -759,6 +758,30 @@ def render_step_card(step_num: int, action: AgentAction):
             if len(reasoning_text) > 400:
                 with st.expander("Show full reasoning"):
                     st.text(reasoning_text)
+        
+        st.divider()
+
+
+def render_skipped_agent(step_num: int, agent_info: Dict):
+    """
+    Render a placeholder for an agent that was skipped during execution.
+    """
+    is_llm = agent_info["is_llm"]
+    emoji = agent_info["emoji"]
+    agent_name = agent_info["name"]
+    badge_text = "LLM Agent" if is_llm else "Rule-Based"
+    
+    with st.container():
+        # Header row
+        header_col1, header_col2 = st.columns([0.1, 0.9])
+        with header_col1:
+            st.markdown(f"## {emoji}")
+        with header_col2:
+            st.markdown(f"### Step {step_num}: {agent_name}")
+            st.caption(":gray[⏭️ Skipped - Not executed in this query]")
+        
+        # Simple message
+        st.info("This agent was not needed for this query and was skipped.")
         
         st.divider()
 
@@ -888,11 +911,7 @@ def render_reasoning_panel(response: FinalResponse):
     """
     Unified reasoning panel with:
     - Visual agent map at top
-    - Detailed execution steps with 4-section layout:
-      1. INPUT - what the agent received
-      2. ACTION - what the agent did
-      3. OUTPUT - what the agent produced
-      4. REASONING - why/how it made decisions
+    - Detailed execution steps showing ALL 12 agents (executed or skipped)
     """
     trace = response.reasoning_trace
     
@@ -902,12 +921,27 @@ def render_reasoning_panel(response: FinalResponse):
     
     st.markdown("---")
     
-    # Detailed Execution Steps
-    st.markdown("#### 📋 Detailed Execution Steps")
-    st.caption("Each step shows: Input → Action → Output → Reasoning")
+    # Detailed Execution Steps - Show ALL 12 agents
+    st.markdown("#### 📋 Detailed Execution Steps (All 12 Agents)")
+    st.caption("Showing all agents in pipeline - executed and skipped")
     
-    for i, action in enumerate(trace.actions, 1):
-        render_step_card(i, action)
+    # Create a map of executed agents
+    executed_agents = {action.agent_name: action for action in trace.actions}
+    
+    # Show all 12 agents in order
+    step_num = 1
+    for agent_info in AGENT_PIPELINE:
+        agent_name = agent_info["name"]
+        
+        # Check if this agent was executed
+        if agent_name in executed_agents:
+            # Agent was executed - show full details
+            render_step_card(step_num, executed_agents[agent_name])
+        else:
+            # Agent was skipped - show placeholder
+            render_skipped_agent(step_num, agent_info)
+        
+        step_num += 1
     
     # Legend
     st.markdown("---")

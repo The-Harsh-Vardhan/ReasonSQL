@@ -759,9 +759,35 @@ Return JSON:
     
     def _batch_4_response_synthesis(self, state: BatchPipelineState) -> BatchPipelineState:
         """Single LLM call for ResponseSynthesizer agent."""
-        result_summary = f"{state.row_count} rows" if state.execution_result else "No results"
-        
-        prompt = f"""You are ResponseSynthesizer agent. Generate a human-readable answer.
+        # Handle META_QUERY differently - use schema context instead of query results
+        if state.intent == "META_QUERY":
+            # Format schema for readable output
+            schema_text = state.schema_context.replace(';', '\n') if state.schema_context else "No schema available"
+            
+            prompt = f"""You are ResponseSynthesizer agent. Generate a human-readable answer for a META QUERY about database structure.
+
+USER QUERY: {state.user_query}
+
+DATABASE SCHEMA:
+{schema_text}
+
+Generate a natural language answer that:
+1. Directly answers the user's question about the database structure
+2. Lists the relevant tables clearly
+3. Is concise and well-formatted
+
+IMPORTANT: Return ONLY valid JSON in this exact format:
+{{
+  "response_synthesizer": {{
+    "answer": "your human-readable answer here"
+  }}
+}}
+"""
+        else:
+            # Regular data query - use execution results
+            result_summary = f"{state.row_count} rows" if state.execution_result else "No results"
+            
+            prompt = f"""You are ResponseSynthesizer agent. Generate a human-readable answer.
 
 USER QUERY: {state.user_query}
 QUERY RESULTS: {result_summary}
