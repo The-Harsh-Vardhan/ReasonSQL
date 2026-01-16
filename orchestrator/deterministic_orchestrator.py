@@ -167,15 +167,18 @@ class DeterministicOrchestrator:
             output = self._run_intent_analyzer(state)
             state.intent_output = output
             
+            # Handle both enum and string values
+            intent_value = output.intent.value if hasattr(output.intent, 'value') else str(output.intent)
+            
             state.add_trace(
                 "IntentAnalyzer",
                 "Classified query intent",
-                f"Intent={output.intent.value}, Confidence={output.confidence}",
+                f"Intent={intent_value}, Confidence={output.confidence}",
                 output.reason
             )
             
             # DECISION: Route based on intent
-            if output.intent == IntentType.AMBIGUOUS:
+            if output.intent == IntentType.AMBIGUOUS or str(output.intent).upper() == "AMBIGUOUS":
                 self._log(f"  → Decision: AMBIGUOUS detected, routing to Clarification")
                 state.current_step = Step.CLARIFICATION
             elif output.intent == IntentType.META_QUERY:
@@ -203,7 +206,9 @@ class DeterministicOrchestrator:
             )
             
             # DECISION: If still ambiguous, we need to ask user
-            if output.status == AgentStatus.AMBIGUOUS:
+            # Handle both enum and string values from different LLM providers (case-insensitive)
+            is_ambiguous = output.status == AgentStatus.AMBIGUOUS or str(output.status).upper() == "AMBIGUOUS"
+            if is_ambiguous:
                 self._log(f"  → Decision: Still ambiguous, cannot proceed")
                 # In a real system, this would pause for user input
                 # For now, we proceed with assumptions
@@ -368,15 +373,20 @@ class DeterministicOrchestrator:
             output = self._run_sql_executor(state)
             state.executor_output = output
             
+            # Handle both enum and string values
+            status_value = output.status.value if hasattr(output.status, 'value') else str(output.status)
+            
             state.add_trace(
                 "SQLExecutor",
                 "Executed SQL",
-                f"Status: {output.status.value}, Rows: {output.row_count}",
+                f"Status: {status_value}, Rows: {output.row_count}",
                 output.error_message or "Success"
             )
             
             # DECISION: Check if execution succeeded
-            if output.status == AgentStatus.ERROR or output.is_empty:
+            # Handle both enum and string values from different LLM providers (case-insensitive)
+            is_error = output.status == AgentStatus.ERROR or str(output.status).upper() == "ERROR"
+            if is_error or output.is_empty:
                 self._log(f"  → Execution failed or empty: {output.error_message or 'Empty result'}")
                 
                 # If we can retry, go to self-correction
@@ -449,10 +459,13 @@ class DeterministicOrchestrator:
             output = self._run_response_synthesizer(state)
             state.response_output = output
             
+            # Handle both enum and string values
+            status_value = output.status.value if hasattr(output.status, 'value') else str(output.status)
+            
             state.add_trace(
                 "ResponseSynthesizer",
                 "Created human-readable response",
-                f"Status: {output.status.value}",
+                f"Status: {status_value}",
                 output.answer[:100]
             )
             
@@ -964,9 +977,12 @@ class DeterministicOrchestrator:
         
         status = AgentStatus.AMBIGUOUS if intent == IntentType.AMBIGUOUS else AgentStatus.OK
         
+        # Handle both enum and string values from different LLM providers
+        intent_value = intent.value if hasattr(intent, 'value') else str(intent)
+        
         return IntentAnalyzerOutput(
             status=status,
-            reason=data.get("reason", f"Classified as {intent.value}"),
+            reason=data.get("reason", f"Classified as {intent_value}"),
             intent=intent,
             confidence=data.get("confidence", 0.8),
             relevant_tables=data.get("relevant_tables", []),
@@ -986,10 +1002,14 @@ class DeterministicOrchestrator:
         
         # If we have resolutions or assumptions, we're OK
         # If only questions, we're still AMBIGUOUS
+        # BUT: if there are no questions either, it means query was already clear
         if resolved or assumptions:
             status = AgentStatus.OK
-        else:
+        elif questions:
             status = AgentStatus.AMBIGUOUS
+        else:
+            # No resolutions, no assumptions, no questions = query was already clear
+            status = AgentStatus.OK
         
         return ClarificationOutput(
             status=status,

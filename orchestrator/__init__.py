@@ -10,18 +10,33 @@ from .enhanced_orchestrator import (
 from .deterministic_orchestrator import (
     DeterministicOrchestrator,
     Step,
-    run_query
+    run_query as deterministic_run_query
+)
+from .quota_optimized_orchestrator import (
+    QuotaOptimizedOrchestrator,
+    LLMBudget,
+    LLMStage,
+    BudgetExceededError,
+    create_quota_optimized_orchestrator,
+    run_query  # Default run_query uses quota-optimized
 )
 
-# Default export is the deterministic orchestrator
-NL2SQLOrchestrator = DeterministicOrchestrator
+# Default export: Use quota-optimized for Gemini API sustainability
+NL2SQLOrchestrator = QuotaOptimizedOrchestrator
 
 __all__ = [
-    # RECOMMENDED: Deterministic state-machine orchestrator
+    # RECOMMENDED: Quota-optimized orchestrator (4-6 LLM calls vs 12)
+    "QuotaOptimizedOrchestrator",
+    "NL2SQLOrchestrator",  # Alias for QuotaOptimizedOrchestrator
+    "LLMBudget",
+    "LLMStage",
+    "BudgetExceededError",
+    "create_quota_optimized_orchestrator",
+    "run_query",  # Default uses quota-optimized
+    # Deterministic orchestrator (full 12 agents, higher LLM usage)
     "DeterministicOrchestrator",
-    "NL2SQLOrchestrator",  # Alias for DeterministicOrchestrator
     "Step",
-    "run_query",
+    "deterministic_run_query",
     # Legacy orchestrators (for reference)
     "LegacyOrchestrator",
     "legacy_run_query",

@@ -20,6 +20,7 @@ class ExecutionStatus(str, Enum):
     ERROR = "error"
     EMPTY = "empty"
     VALIDATION_FAILED = "validation_failed"
+    BLOCKED = "blocked"  # Query blocked by safety validator
 
 
 # ============================================================

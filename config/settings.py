@@ -187,10 +187,12 @@ def get_llm(validate: bool = True) -> LLM:
             api_key=api_key
         )
     elif LLM_PROVIDER == "gemini":
+        # For Gemini, CrewAI's LiteLLM reads from GEMINI_API_KEY env var
+        if not os.getenv("GEMINI_API_KEY"):
+            os.environ["GEMINI_API_KEY"] = api_key
         return LLM(
-            model="gemini/gemini-pro",
-            temperature=0.1,
-            api_key=api_key
+            model=LLM_MODEL,  # Should be gemini/gemini-2.5-flash format
+            temperature=0.1
         )
     else:
         raise ConfigurationError(f"Unsupported LLM provider: {LLM_PROVIDER}. Use 'groq' or 'gemini'.")

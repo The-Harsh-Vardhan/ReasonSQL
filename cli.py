@@ -38,37 +38,72 @@ def print_reasoning_trace(response: FinalResponse):
     """Display the reasoning trace in a formatted way."""
     trace = response.reasoning_trace
     
-    # Create reasoning trace table
-    table = Table(
-        title="🧠 Reasoning Trace",
-        box=box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan"
-    )
-    table.add_column("Step", style="dim", width=6)
-    table.add_column("Agent", style="green", width=25)
-    table.add_column("Action", style="yellow", width=30)
-    table.add_column("Output Summary", style="white", width=50)
-    
-    for i, action in enumerate(trace.actions, 1):
-        table.add_row(
-            str(i),
-            action.agent_name[:24],
-            action.action[:29],
-            action.output_summary[:49] + "..." if len(action.output_summary) > 49 else action.output_summary
+    # Handle both old format (ReasoningTrace object) and new format (list of dicts)
+    if isinstance(trace, list):
+        # New quota-optimized orchestrator format
+        table = Table(
+            title="🧠 Reasoning Trace",
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold cyan"
         )
-    
-    console.print(table)
-    
-    # Print metrics
-    metrics = Table(title="📊 Execution Metrics", box=box.SIMPLE)
-    metrics.add_column("Metric", style="cyan")
-    metrics.add_column("Value", style="green")
-    metrics.add_row("Total Time", f"{trace.total_time_ms:.2f} ms")
-    metrics.add_row("Correction Attempts", str(trace.correction_attempts))
-    metrics.add_row("Final Status", trace.final_status.value)
-    
-    console.print(metrics)
+        table.add_column("", style="dim", width=3)
+        table.add_column("Agent", style="green", width=22)
+        table.add_column("Action", style="yellow", width=27)
+        table.add_column("Output Summary", style="white", width=47)
+        
+        for i, action in enumerate(trace, 1):
+            agent = action.get("agent", "Unknown")[:21]
+            act = action.get("action", "")[:26]
+            summary = action.get("summary", "")
+            if len(summary) > 46:
+                summary = summary[:46] + "..."
+            table.add_row(str(i), agent, act, summary)
+        
+        console.print(table)
+        
+        # Print metrics from execution_metrics
+        metrics_data = response.execution_metrics if hasattr(response, 'execution_metrics') else {}
+        metrics = Table(title="📊 Execution Metrics", box=box.SIMPLE)
+        metrics.add_column("Metric", style="cyan")
+        metrics.add_column("Value", style="green")
+        metrics.add_row("Total Time", f"{metrics_data.get('total_time_ms', 0):.2f} ms")
+        metrics.add_row("LLM Calls", f"{metrics_data.get('llm_calls', 'N/A')} / {metrics_data.get('llm_budget', 'N/A')}")
+        metrics.add_row("Retries", str(metrics_data.get('retries', 0)))
+        metrics.add_row("Final Status", str(metrics_data.get('status', 'unknown')))
+        console.print(metrics)
+        
+    else:
+        # Old deterministic orchestrator format (ReasoningTrace object)
+        table = Table(
+            title="🧠 Reasoning Trace",
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold cyan"
+        )
+        table.add_column("", style="dim", width=3)
+        table.add_column("Agent", style="green", width=22)
+        table.add_column("Action", style="yellow", width=27)
+        table.add_column("Output Summary", style="white", width=47)
+        
+        for i, action in enumerate(trace.actions, 1):
+            table.add_row(
+                str(i),
+                action.agent_name[:21],
+                action.action[:26],
+                action.output_summary[:46] + "..." if len(action.output_summary) > 46 else action.output_summary
+            )
+        
+        console.print(table)
+        
+        # Print metrics
+        metrics = Table(title="📊 Execution Metrics", box=box.SIMPLE)
+        metrics.add_column("Metric", style="cyan")
+        metrics.add_column("Value", style="green")
+        metrics.add_row("Total Time", f"{trace.total_time_ms:.2f} ms")
+        metrics.add_row("Correction Attempts", str(trace.correction_attempts))
+        metrics.add_row("Final Status", trace.final_status.value if hasattr(trace.final_status, 'value') else str(trace.final_status))
+        console.print(metrics)
 
 
 def print_sql(sql: str):
@@ -84,10 +119,19 @@ def print_answer(response: FinalResponse):
         ExecutionStatus.SUCCESS: "✅",
         ExecutionStatus.EMPTY: "📭",
         ExecutionStatus.ERROR: "❌",
-        ExecutionStatus.VALIDATION_FAILED: "⚠️"
+        ExecutionStatus.VALIDATION_FAILED: "⚠️",
+        ExecutionStatus.BLOCKED: "🚫"
     }
     
-    emoji = status_emoji.get(response.reasoning_trace.final_status, "❓")
+    # Handle both formats
+    if hasattr(response, 'status'):
+        status = response.status
+    elif hasattr(response, 'reasoning_trace') and hasattr(response.reasoning_trace, 'final_status'):
+        status = response.reasoning_trace.final_status
+    else:
+        status = ExecutionStatus.SUCCESS
+    
+    emoji = status_emoji.get(status, "❓")
     
     console.print(f"\n{emoji} [bold green]Answer:[/bold green]")
     console.print(Panel(
@@ -96,7 +140,7 @@ def print_answer(response: FinalResponse):
         title="Response"
     ))
     
-    if response.row_count > 0:
+    if hasattr(response, 'row_count') and response.row_count > 0:
         console.print(f"[dim]Rows returned: {response.row_count}[/dim]")
     
     if response.warnings:

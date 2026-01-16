@@ -3,11 +3,13 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CrewAI](https://img.shields.io/badge/Framework-CrewAI-green.svg)](https://github.com/joaomdmoura/crewai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![LLM: Groq](https://img.shields.io/badge/LLM-Groq%20Llama%203.1-purple.svg)](https://groq.com/)
+[![LLM: Gemini/Groq](https://img.shields.io/badge/LLM-Gemini%20%7C%20Groq-purple.svg)](https://ai.google.dev/)
 
 > **Intelligent Natural Language to SQL using CrewAI Multi-Agent Architecture**
 
 A sophisticated system that converts natural language questions into SQL queries through a **12-agent pipeline** with schema reasoning, self-correction, safety validation, and explainable AI.
+
+**🚀 NEW: Quota-Optimized Orchestrator** - Uses only 4-6 LLM calls per query (down from 12) for sustainable API usage.
 
 ---
 
@@ -21,9 +23,9 @@ python -m venv venv && venv\Scripts\activate  # Windows
 # source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 
-# 2. Configure (get free API key from https://console.groq.com/keys)
+# 2. Configure (get free API key from https://console.groq.com/keys or https://ai.google.dev/)
 cp .env.example .env
-# Edit .env and add your GROQ_API_KEY
+# Edit .env and add your GROQ_API_KEY or GEMINI_API_KEY
 
 # 3. Run setup and demo
 python setup.py   # Downloads Chinook database
