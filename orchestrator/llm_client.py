@@ -38,7 +38,7 @@ from enum import Enum
 import time
 
 from litellm import completion
-from config import VERBOSE
+from config import VERBOSE, MAX_LLM_TOKENS, ENABLE_QWEN_FALLBACK, ConfigurationError
 
 
 # ============================================================
@@ -49,6 +49,7 @@ class LLMProvider(Enum):
     """Supported LLM providers."""
     GEMINI = "gemini"
     GROQ = "groq"
+    QWEN = "qwen"  # Tertiary fallback only
 
 
 @dataclass
@@ -95,7 +96,7 @@ class LLMClient(ABC):
         self.call_count = 0
     
     @abstractmethod
-    def generate(self, prompt: str, metadata: Dict[str, Any] = None) -> LLMResponse:
+    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None) -> LLMResponse:
         """
         Generate a response from the LLM.
         
@@ -135,15 +136,16 @@ class GeminiClient(LLMClient):
         super().__init__(model, verbose)
         self.provider = LLMProvider.GEMINI
     
-    def generate(self, prompt: str, metadata: Dict[str, Any] = None) -> LLMResponse:
-        """Generate response from Gemini."""
-        self._log(f"Calling Gemini ({self.model})...")
+    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None) -> LLMResponse:
+        """Generate response from Gemini with strict token limits."""
+        self._log(f"Calling Gemini ({self.model}) [max_tokens={MAX_LLM_TOKENS}]...")
         
         try:
             response = completion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
+                temperature=0.2,  # Low temperature for consistency
+                max_tokens=MAX_LLM_TOKENS  # HARD CAP - prevents quota exhaustion
             )
             
             self.call_count += 1
@@ -189,23 +191,47 @@ class GroqClient(LLMClient):
     """
     Groq LLM provider implementation.
     
-    Uses LiteLLM for Groq API calls.
-    Serves as fallback when Gemini fails.
+    CRITICAL: Only 8B models allowed to prevent TPD quota exhaustion.
+    70B models will crash the demo with rate limits.
+    
+    ENFORCED MODELS:
+    - llama-3.1-8b-instant (recommended)
+    - llama-3.2-8b-instant
+    - llama3-8b-8192
+    
+    FORBIDDEN: llama-3.1-70b-versatile, llama-3.3-70b-versatile
     """
     
-    def __init__(self, model: str = "groq/llama-3.3-70b-versatile", verbose: bool = VERBOSE):
+    ALLOWED_MODELS = [
+        "groq/llama-3.1-8b-instant",
+        "groq/llama-3.2-8b-instant",
+        "groq/llama3-8b-8192"
+    ]
+    
+    def __init__(self, model: str = "groq/llama-3.1-8b-instant", verbose: bool = VERBOSE):
+        # CRITICAL: Hard fail on 70B models
+        if model not in self.ALLOWED_MODELS:
+            raise ConfigurationError(
+                f"🛑 FORBIDDEN: Groq model '{model}' is not allowed!\n"
+                f"   Only 8B models permitted: {self.ALLOWED_MODELS}\n"
+                f"   70B models exhaust TPD quota and crash demos.\n"
+                f"   Use: groq/llama-3.1-8b-instant"
+            )
+        
         super().__init__(model, verbose)
         self.provider = LLMProvider.GROQ
+        self._log(f"✓ Groq initialized with SAFE model: {model}")
     
-    def generate(self, prompt: str, metadata: Dict[str, Any] = None) -> LLMResponse:
-        """Generate response from Groq."""
-        self._log(f"Calling Groq ({self.model})...")
+    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None) -> LLMResponse:
+        """Generate response from Groq with strict token limits."""
+        self._log(f"Calling Groq ({self.model}) [max_tokens={MAX_LLM_TOKENS}]...")
         
         try:
             response = completion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
+                temperature=0.2,  # Low temperature for consistency
+                max_tokens=MAX_LLM_TOKENS  # HARD CAP - prevents quota exhaustion
             )
             
             self.call_count += 1
@@ -226,158 +252,389 @@ class GroqClient(LLMClient):
 
 
 # ============================================================
+# QWEN CLIENT (TERTIARY FALLBACK ONLY)
+# ============================================================
+
+class QwenClient(LLMClient):
+    """
+    Qwen2.5-Coder-32B-Instruct LLM provider implementation.
+    
+    CRITICAL: This is a TERTIARY fallback ONLY.
+    Only used when BOTH Gemini AND Groq have failed.
+    
+    SAFETY GUARDRAILS:
+    - max_tokens capped at 512 (lower than standard 256 for safety)
+    - temperature = 0.2 (deterministic)
+    - streaming disabled
+    - max_retries = 1 (no retry loops)
+    - NO self-correction loops allowed
+    """
+    
+    def __init__(self, model: str = "qwen/qwen2.5-coder-32b-instruct", verbose: bool = VERBOSE):
+        super().__init__(model, verbose)
+        self.provider = LLMProvider.QWEN
+    
+    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None) -> LLMResponse:
+        """Generate response from Qwen with STRICT safety limits."""
+        # CRITICAL: Qwen has LOWER token limit for safety
+        qwen_max_tokens = min(MAX_LLM_TOKENS, 512)  # Never exceed 512
+        
+        self._log(f"⚠️  Calling Qwen (TERTIARY FALLBACK) ({self.model}) [max_tokens={qwen_max_tokens}]...")
+        self._log(f"⚠️  WARNING: Both Gemini and Groq unavailable - using last-resort fallback")
+        
+        try:
+            response = completion(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,  # Deterministic
+                max_tokens=qwen_max_tokens,  # STRICT LIMIT
+                stream=False  # Disable streaming for safety
+            )
+            
+            self.call_count += 1
+            content = response.choices[0].message.content
+            
+            self._log(f"✓ Qwen call successful (Total: {self.call_count})")
+            
+            return LLMResponse(
+                content=content,
+                provider=self.provider,
+                model=self.model,
+                tokens_used=response.usage.total_tokens if hasattr(response, 'usage') else 0
+            )
+        
+        except Exception as e:
+            self._log(f"✗ Qwen error (TERTIARY FALLBACK FAILED): {e}")
+            raise LLMError(f"Qwen API error (all providers exhausted): {e}")
+
+
+# ============================================================
 # MULTI-PROVIDER LLM (FALLBACK ORCHESTRATOR)
 # ============================================================
 
 class MultiProviderLLM:
     """
-    LLM client with automatic fallback.
+    LLM client with automatic fallback and graceful quota exhaustion handling.
     
-    FALLBACK LOGIC:
-    ===============
-    1. Try primary provider (Gemini)
-    2. If RateLimitError or QuotaExceededError:
-       - Log the failure
-       - Switch to fallback provider (Groq)
-       - Retry ONCE
-    3. If fallback also fails:
-       - Abort gracefully
-       - Return clear error
+    FALLBACK CHAIN (DETERMINISTIC):
+    ================================
+    1. PRIMARY: Gemini (gemini-2.0-flash-exp)
+       - Fast, high quality, preferred
+       - Auto-fallback on quota exhaustion
+    
+    2. SECONDARY: Groq (llama-3.1-8b-instant ONLY)
+       - Used if Gemini hits quota/rate limits
+       - 8B model enforced (70B forbidden)
+       - No automatic retry if Groq fails
+    
+    3. TERTIARY: Qwen (DISABLED BY DEFAULT)
+       - Controlled by ENABLE_QWEN_FALLBACK flag
+       - If disabled: System aborts gracefully when Groq fails
+       - If enabled: Last resort with strict limits
+    
+    GRACEFUL FAILURE:
+    =================
+    When all enabled providers fail:
+    - Returns QuotaExhaustedError with clear message
+    - Preserves reasoning trace with provider attempts
+    - No hard crash, no partial SQL
+    - User sees: "LLM quota exhausted. Please retry later."
     
     RATE LIMIT AWARENESS:
     ====================
-    - Tracks whether Gemini quota is known to be exhausted
-    - If exhausted, skips Gemini entirely and uses Groq
+    - Tracks which providers are exhausted
+    - Skips known-exhausted providers automatically
     - Resets on new session
-    
-    MAX ATTEMPTS:
-    =============
-    - 2 attempts per request (Primary → Fallback)
-    - No infinite loops
     """
     
     def __init__(
         self,
         primary: str = "gemini",
         fallback: str = "groq",
+        tertiary: Optional[str] = None,  # DISABLED by default (controlled by feature flag)
         gemini_model: str = "gemini/gemini-2.0-flash-exp",
-        groq_model: str = "groq/llama-3.3-70b-versatile",
+        groq_model: str = "groq/llama-3.1-8b-instant",
+        qwen_model: str = "qwen/qwen2.5-coder-32b-instruct",
         verbose: bool = VERBOSE
     ):
         self.verbose = verbose
         
-        # Initialize clients
+        # Initialize primary and secondary clients (ALWAYS)
         self.gemini = GeminiClient(model=gemini_model, verbose=verbose)
         self.groq = GroqClient(model=groq_model, verbose=verbose)
         
-        # Set primary and fallback
+        # Initialize tertiary client ONLY if enabled
+        self.qwen = None
+        self.tertiary_enabled = ENABLE_QWEN_FALLBACK and tertiary is not None
+        
+        if self.tertiary_enabled:
+            self._log("⚠️  Qwen tertiary fallback ENABLED")
+            self.qwen = QwenClient(model=qwen_model, verbose=verbose)
+        else:
+            self._log("✓ Qwen tertiary fallback DISABLED (graceful abort on Groq failure)")
+        
+        # Set fallback chain: Primary → Secondary → (Tertiary if enabled)
         self.primary_name = primary
-        self.fallback_name = fallback
+        self.secondary_name = fallback
+        self.tertiary_name = tertiary if self.tertiary_enabled else None
         
-        self.primary = self.gemini if primary == "gemini" else self.groq
-        self.fallback = self.groq if fallback == "groq" else self.gemini
+        # Map names to clients
+        self.clients = {
+            "gemini": self.gemini,
+            "groq": self.groq,
+        }
+        if self.qwen:
+            self.clients["qwen"] = self.qwen
         
-        # Track quota status
-        self.gemini_quota_exhausted = False
+        self.primary = self.clients[primary]
+        self.secondary = self.clients[fallback]
+        self.tertiary = self.clients[tertiary] if self.tertiary_enabled and tertiary in self.clients else None
+        
+        # Track quota status per provider
+        self.provider_exhausted = {
+            "gemini": False,
+            "groq": False,
+        }
+        if self.tertiary_enabled:
+            self.provider_exhausted["qwen"] = False
         
         # Statistics
         self.stats = {
             "total_calls": 0,
             "gemini_calls": 0,
             "groq_calls": 0,
-            "fallbacks": 0
+            "qwen_calls": 0,
+            "secondary_fallbacks": 0,
+            "tertiary_fallbacks": 0,
+            "graceful_aborts": 0
         }
+        
+        # Provider attempt tracking (for reasoning trace)
+        self.last_provider_attempts = []
     
     def generate(self, prompt: str, metadata: Dict[str, Any] = None) -> LLMResponse:
         """
-        Generate response with automatic fallback.
+        Generate response with automatic tertiary fallback.
         
         Flow:
-        1. Check if Gemini quota is known to be exhausted
-           - If yes, skip directly to Groq
+        1. Check if primary is known to be exhausted → skip to secondary
         2. Try primary provider (Gemini)
-        3. If rate limit/quota error, fallback to Groq
-        4. Return response with fallback metadata
+        3. If fails → Try secondary (Groq)
+        4. If fails → Try tertiary (Qwen) as LAST RESORT
+        5. If all fail → Abort with clear error
         """
         metadata = metadata or {}
         self.stats["total_calls"] += 1
         
-        # If Gemini quota is known to be exhausted, skip directly to Groq
-        if self.gemini_quota_exhausted and self.primary_name == "gemini":
-            self._log("⚠️ Gemini quota exhausted (known), using Groq directly")
-            return self._call_fallback(prompt, metadata, "Gemini quota known to be exhausted")
+        # Skip known-exhausted primary provider
+        if self.provider_exhausted[self.primary_name]:
+            self._log(f"⚠️ {self.primary_name.upper()} quota exhausted (known), skipping to secondary")
+            return self._call_secondary(prompt, metadata, f"{self.primary_name} quota known to be exhausted")
         
-        # Try primary provider
+        # ATTEMPT 1: Try primary provider
         try:
-            self._log(f"→ Attempting primary provider: {self.primary_name.upper()}")
+            self._log(f"→ Attempting PRIMARY provider: {self.primary_name.upper()}")
             response = self.primary.generate(prompt, metadata)
             
             # Track successful call
-            if self.primary_name == "gemini":
-                self.stats["gemini_calls"] += 1
-            else:
-                self.stats["groq_calls"] += 1
+            self.stats[f"{self.primary_name}_calls"] += 1
+            self._log(f"✓ PRIMARY ({self.primary_name.upper()}) successful")
             
             return response
         
         except (RateLimitError, QuotaExceededError) as e:
-            # Mark Gemini as exhausted if it's the primary
-            if self.primary_name == "gemini":
-                self.gemini_quota_exhausted = True
+            # Mark primary as exhausted
+            self.provider_exhausted[self.primary_name] = True
             
             reason = str(e)
-            self._log(f"⚠️ Primary provider failed: {reason}")
-            self._log(f"→ Falling back to {self.fallback_name.upper()}...")
+            self._log(f"⚠️ PRIMARY provider failed: {reason}")
             
-            # Attempt fallback
-            return self._call_fallback(prompt, metadata, reason)
+            # ATTEMPT 2: Fallback to secondary
+            return self._call_secondary(prompt, metadata, reason)
         
         except LLMError as e:
-            # For non-quota errors, still try fallback once
-            self._log(f"⚠️ Primary provider error: {e}")
-            self._log(f"→ Attempting fallback to {self.fallback_name.upper()}...")
+            # For non-quota errors, still try secondary
+            self._log(f"⚠️ PRIMARY provider error: {e}")
             
-            return self._call_fallback(prompt, metadata, str(e))
+            return self._call_secondary(prompt, metadata, str(e))
     
-    def _call_fallback(self, prompt: str, metadata: Dict[str, Any], reason: str) -> LLMResponse:
+    def _call_secondary(self, prompt: str, metadata: Optional[Dict[str, Any]], primary_reason: str) -> LLMResponse:
         """
-        Call fallback provider.
+        Call secondary fallback provider (Groq).
         
-        Only attempts ONCE - no retries on fallback.
+        If secondary fails:
+        - If Qwen enabled: Attempt tertiary fallback
+        - If Qwen disabled: Graceful abort with QuotaExhaustedError
         """
-        self.stats["fallbacks"] += 1
+        self.stats["secondary_fallbacks"] += 1
+        self.last_provider_attempts.append({"provider": self.primary_name, "status": "failed", "reason": primary_reason})
+        
+        # Skip if secondary is known to be exhausted
+        if self.provider_exhausted[self.secondary_name]:
+            self._log(f"⚠️ {self.secondary_name.upper()} also exhausted (known)")
+            
+            if self.tertiary_enabled:
+                self._log(f"   → Skipping to tertiary fallback (Qwen)")
+                return self._call_tertiary(prompt, metadata, primary_reason, f"{self.secondary_name} quota exhausted")
+            else:
+                self._log(f"   → Qwen disabled, initiating graceful abort")
+                return self._graceful_abort(primary_reason, f"{self.secondary_name} quota exhausted")
         
         try:
-            response = self.fallback.generate(prompt, metadata)
+            self._log(f"→ Attempting SECONDARY provider: {self.secondary_name.upper()}")
+            response = self.secondary.generate(prompt, metadata)
             
-            # Track fallback call
-            if self.fallback_name == "gemini":
-                self.stats["gemini_calls"] += 1
-            else:
-                self.stats["groq_calls"] += 1
+            # Track secondary call
+            self.stats[f"{self.secondary_name}_calls"] += 1
+            self.last_provider_attempts.append({"provider": self.secondary_name, "status": "success"})
             
             # Mark response as fallback
             response.fallback_occurred = True
-            response.fallback_reason = reason
+            response.fallback_reason = f"Primary ({self.primary_name}) failed: {primary_reason}"
             
-            self._log(f"✓ Fallback successful using {self.fallback_name.upper()}")
+            self._log(f"✓ SECONDARY ({self.secondary_name.upper()}) successful")
+            return response
+        
+        except (RateLimitError, QuotaExceededError) as e:
+            # Mark secondary as exhausted
+            self.provider_exhausted[self.secondary_name] = True
+            secondary_reason = str(e)
+            
+            self._log(f"⚠️ SECONDARY provider also failed: {e}")
+            self.last_provider_attempts.append({"provider": self.secondary_name, "status": "failed", "reason": secondary_reason})
+            
+            if self.tertiary_enabled:
+                # ATTEMPT 3: Last resort - try tertiary
+                self._log(f"   → Attempting tertiary fallback (Qwen)")
+                return self._call_tertiary(prompt, metadata, primary_reason, secondary_reason)
+            else:
+                # Qwen disabled - graceful abort
+                self._log(f"   → Qwen disabled, initiating graceful abort")
+                return self._graceful_abort(primary_reason, secondary_reason)
+        
+        except LLMError as e:
+            secondary_reason = str(e)
+            self._log(f"⚠️ SECONDARY provider error: {e}")
+            self.last_provider_attempts.append({"provider": self.secondary_name, "status": "failed", "reason": secondary_reason})
+            
+            if self.tertiary_enabled:
+                # Try tertiary as last resort
+                return self._call_tertiary(prompt, metadata, primary_reason, secondary_reason)
+            else:
+                # Qwen disabled - graceful abort
+                return self._graceful_abort(primary_reason, secondary_reason)
+    
+    def _call_tertiary(self, prompt: str, metadata: Optional[Dict[str, Any]], 
+                       primary_reason: str, secondary_reason: str) -> LLMResponse:
+        """
+        Call tertiary fallback provider (Qwen) - LAST RESORT ONLY.
+        
+        CRITICAL: This is the final attempt. If Qwen fails, entire request fails.
+        
+        Safety guardrails:
+        - max_tokens ≤ 512
+        - No retries
+        - No self-correction loops
+        """
+        self.stats["tertiary_fallbacks"] += 1
+        
+        # Safety check: This should never be called if tertiary is not enabled
+        if not self.tertiary_enabled or not self.tertiary or not self.tertiary_name:
+            self._log("✗ CRITICAL: _call_tertiary called but tertiary provider not enabled")
+            return self._graceful_abort(primary_reason, secondary_reason)
+        
+        self._log("⚠️⚠️⚠️ CRITICAL: Attempting TERTIARY FALLBACK (LAST RESORT)")
+        self._log(f"⚠️ Primary ({self.primary_name}) failed: {primary_reason}")
+        self._log(f"⚠️ Secondary ({self.secondary_name}) failed: {secondary_reason}")
+        
+        try:
+            response = self.tertiary.generate(prompt, metadata)
+            
+            # Track tertiary call
+            self.stats[f"{self.tertiary_name}_calls"] += 1
+            self.last_provider_attempts.append({"provider": self.tertiary_name, "status": "success"})
+            
+            # Mark response as tertiary fallback with WARNING
+            response.fallback_occurred = True
+            response.fallback_reason = (
+                f"Primary ({self.primary_name}) and Secondary ({self.secondary_name}) unavailable. "
+                f"Using tertiary fallback: {self.tertiary_name}"
+            )
+            
+            self._log(f"✓ TERTIARY ({self.tertiary_name.upper()}) successful (LAST RESORT)")
+            self._log("⚠️ WARNING: Tertiary fallback model used - quality may vary")
+            
             return response
         
         except Exception as e:
-            # Both providers failed
-            self._log(f"✗ Fallback also failed: {e}")
-            raise LLMError(f"Both providers failed. Primary: {reason}, Fallback: {e}")
+            # ALL THREE providers failed - graceful abort
+            tertiary_reason = str(e)
+            self._log(f"✗ TERTIARY provider FAILED: {e}")
+            self._log("✗✗✗ CRITICAL: ALL PROVIDERS EXHAUSTED")
+            self.last_provider_attempts.append({"provider": self.tertiary_name, "status": "failed", "reason": tertiary_reason})
+            
+            return self._graceful_abort(primary_reason, secondary_reason, tertiary_reason)
+    
+    def _graceful_abort(self, primary_reason: str, secondary_reason: str, tertiary_reason: Optional[str] = None) -> LLMResponse:
+        """
+        Gracefully abort when all enabled providers are exhausted.
+        
+        Instead of crashing, returns a controlled error that:
+        - Preserves reasoning trace with provider attempts
+        - Shows clear user message
+        - Allows system to fail safely
+        """
+        self.stats["graceful_aborts"] += 1
+        
+        # Build failure message
+        if self.tertiary_enabled and tertiary_reason:
+            error_msg = (
+                f"LLM quota temporarily exhausted. All providers unavailable:\n"
+                f"  • {self.primary_name.title()}: {primary_reason}\n"
+                f"  • {self.secondary_name.title()}: {secondary_reason}\n"
+                f"  • {self.tertiary_name.title()}: {tertiary_reason}\n\n"
+                f"Please wait a few minutes and retry."
+            )
+        else:
+            error_msg = (
+                f"LLM quota temporarily exhausted. All enabled providers unavailable:\n"
+                f"  • {self.primary_name.title()}: {primary_reason}\n"
+                f"  • {self.secondary_name.title()}: {secondary_reason}\n\n"
+                f"Please wait a few minutes and retry, or enable tertiary fallback (Qwen)."
+            )
+        
+        self._log(f"✗ GRACEFUL ABORT: {error_msg}")
+        
+        # Raise QuotaExceededError instead of hard crash
+        raise QuotaExceededError(error_msg)
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get usage statistics."""
+        """Get usage statistics including all providers."""
+        fallback_chain = f"{self.primary_name} → {self.secondary_name}"
+        if self.tertiary_enabled:
+            fallback_chain += f" → {self.tertiary_name}"
+        else:
+            fallback_chain += " → [Graceful Abort]"
+        
         return {
             **self.stats,
-            "gemini_quota_exhausted": self.gemini_quota_exhausted
+            "providers_exhausted": self.provider_exhausted,
+            "fallback_chain": fallback_chain,
+            "last_provider_attempts": self.last_provider_attempts,
+            "tertiary_enabled": self.tertiary_enabled
         }
     
     def reset_quota_status(self):
-        """Reset quota exhausted flag (useful for new sessions)."""
-        self.gemini_quota_exhausted = False
+        """Reset quota exhausted flags for all enabled providers (useful for new sessions)."""
+        self.provider_exhausted = {
+            "gemini": False,
+            "groq": False,
+        }
+        if self.tertiary_enabled:
+            self.provider_exhausted["qwen"] = False
+        
+        self.last_provider_attempts = []
+        self._log("✓ Provider quota status reset")
     
     def _log(self, message: str):
         """Log if verbose mode is on."""
@@ -392,21 +649,37 @@ class MultiProviderLLM:
 def create_llm_client(
     primary: str = "gemini",
     fallback: str = "groq",
+    tertiary: Optional[str] = None,
     verbose: bool = VERBOSE
 ) -> MultiProviderLLM:
     """
-    Create a multi-provider LLM client with fallback.
+    Create a multi-provider LLM client with conditional tertiary fallback.
+    
+    Fallback chain (deterministic):
+    - PRIMARY: Gemini (always)
+    - SECONDARY: Groq 8B only (always)
+    - TERTIARY: Qwen (only if ENABLE_QWEN_FALLBACK=true)
+    
+    If Qwen disabled:
+    - System gracefully aborts when Groq fails
+    - No hard crash, clear user message
+    - Preserves reasoning trace
     
     Args:
-        primary: Primary provider ("gemini" or "groq")
-        fallback: Fallback provider ("groq" or "gemini")
+        primary: Primary provider ("gemini")
+        fallback: Secondary fallback provider ("groq")
+        tertiary: Tertiary provider ("qwen" or None - controlled by ENABLE_QWEN_FALLBACK)
         verbose: Enable verbose logging
     
     Returns:
-        MultiProviderLLM instance
+        MultiProviderLLM instance with safe fallback chain
     """
+    # Use ENABLE_QWEN_FALLBACK flag to determine tertiary
+    actual_tertiary = "qwen" if ENABLE_QWEN_FALLBACK else None
+    
     return MultiProviderLLM(
         primary=primary,
         fallback=fallback,
+        tertiary=actual_tertiary,
         verbose=verbose
     )

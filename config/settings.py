@@ -133,7 +133,38 @@ DATABASE_PATH = os.getenv("DATABASE_PATH", str(DATA_DIR / "chinook.db"))
 # =============================================================================
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
-LLM_MODEL = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
+LLM_MODEL = os.getenv("LLM_MODEL", "groq/llama-3.1-8b-instant")
+
+# Provider configuration (SINGLE SOURCE OF TRUTH)
+PRIMARY_PROVIDER = "gemini"  # Always Gemini first
+SECONDARY_PROVIDER = "groq"  # Groq as fallback
+TERTIARY_PROVIDER = None  # Disabled by default (see ENABLE_QWEN_FALLBACK)
+
+# Qwen tertiary fallback (DISABLED BY DEFAULT)
+ENABLE_QWEN_FALLBACK = os.getenv("ENABLE_QWEN_FALLBACK", "false").lower() == "true"
+if ENABLE_QWEN_FALLBACK:
+    TERTIARY_PROVIDER = "qwen"
+
+# Model enforcement (CRITICAL - NO 70B MODELS ALLOWED ON GROQ)
+GROQ_ALLOWED_MODELS = [
+    "llama-3.1-8b-instant",
+    "llama-3.2-8b-instant",
+    "llama3-8b-8192"
+]
+GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant")
+
+# Validate Groq model at startup
+if GROQ_FALLBACK_MODEL not in GROQ_ALLOWED_MODELS:
+    raise ConfigurationError(
+        f"❌ FORBIDDEN: Groq model '{GROQ_FALLBACK_MODEL}' is not allowed!\n"
+        f"   Only 8B models permitted: {GROQ_ALLOWED_MODELS}\n"
+        f"   70B models will exhaust TPD quota.\n"
+        f"   Update GROQ_FALLBACK_MODEL in .env to: llama-3.1-8b-instant"
+    )
+
+# Token limits (HARD CAPS to prevent quota exhaustion)
+MAX_LLM_TOKENS = int(os.getenv("MAX_LLM_TOKENS", "256"))
+MAX_LLM_CALLS_PER_QUERY = int(os.getenv("MAX_LLM_CALLS_PER_QUERY", "5"))
 
 # =============================================================================
 # SYSTEM SETTINGS

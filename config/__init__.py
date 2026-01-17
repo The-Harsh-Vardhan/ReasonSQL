@@ -13,6 +13,15 @@ from .settings import (
     # LLM configuration
     LLM_PROVIDER,
     LLM_MODEL,
+    MAX_LLM_TOKENS,
+    MAX_LLM_CALLS_PER_QUERY,
+    # Provider configuration
+    PRIMARY_PROVIDER,
+    SECONDARY_PROVIDER,
+    TERTIARY_PROVIDER,
+    ENABLE_QWEN_FALLBACK,
+    GROQ_ALLOWED_MODELS,
+    GROQ_FALLBACK_MODEL,
     # Validation
     ConfigurationError,
     validate_configuration,
@@ -32,6 +41,15 @@ __all__ = [
     # LLM configuration
     "LLM_PROVIDER",
     "LLM_MODEL",
+    "MAX_LLM_TOKENS",
+    "MAX_LLM_CALLS_PER_QUERY",
+    # Provider configuration
+    "PRIMARY_PROVIDER",
+    "SECONDARY_PROVIDER",
+    "TERTIARY_PROVIDER",
+    "ENABLE_QWEN_FALLBACK",
+    "GROQ_ALLOWED_MODELS",
+    "GROQ_FALLBACK_MODEL",
     # Validation
     "ConfigurationError",
     "validate_configuration",

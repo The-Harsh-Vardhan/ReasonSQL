@@ -161,7 +161,7 @@ Do not explain. Do not add comments. Just the SQL query."""
     try:
         # Single LLM call - no retries
         response = completion(
-            model="groq/llama-3.3-70b-versatile",
+            model="groq/llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1  # Low temperature for consistency
         )
