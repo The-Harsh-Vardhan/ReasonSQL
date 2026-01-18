@@ -1,5 +1,5 @@
 # =====================================================
-# NL2SQL Multi-Agent System - Git Ignore Configuration
+# ReasonSQL Multi-Agent System - Git Ignore Configuration
 # =====================================================
 
 # --------------------------
@@ -33,7 +33,13 @@ venv/
 env/
 ENV/
 .venv/
+.venv-*/
 .env/
+
+# --------------------------
+# Private Content (Not for GitHub)
+# --------------------------
+Extras/
 
 # --------------------------
 # IDE & Editor

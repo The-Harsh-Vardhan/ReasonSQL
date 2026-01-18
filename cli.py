@@ -7,12 +7,12 @@ DESIGN PRINCIPLES:
 - Make the multi-agent workflow OBVIOUS (not a black box)
 - Show Input → Action → Output → Reasoning per agent
 - Clean structure suitable for demos and debugging
-- Support both compact (Judge Mode) and verbose modes
+- Support both compact (Simple Mode) and verbose modes
 - Demo Mode with 5 curated queries
 - Comparison Mode to show naive baseline vs multi-agent
 
 MODES:
-- Judge Mode (default): Shows only key decision points
+- Simple Mode (default): Shows only key decision points
 - Verbose Mode (--verbose): Shows all 12 agents with full details
 - Demo Mode (--demo): Runs 5 preset queries demonstrating capabilities
 - Comparison Mode (--compare-naive): Shows naive baseline alongside multi-agent
@@ -76,7 +76,7 @@ DEMO_QUERIES = [
     }
 ]
 
-# Key agents to highlight in Judge Mode
+# Key agents to highlight in Simple Mode
 KEY_AGENTS = ["IntentAnalyzer", "SchemaExplorer", "QueryPlanner", "SafetyValidator", "ResponseSynthesizer"]
 
 
@@ -239,7 +239,7 @@ def print_compact_trace(response: FinalResponse):
 
 def print_judge_trace(response: FinalResponse):
     """
-    Print Judge Mode trace - only key decision points with highlights.
+    Print Simple Mode trace - only key decision points with highlights.
     WHY: Judges need to quickly see the important parts without information overload.
     
     Shows only: IntentAnalyzer, SchemaExplorer, QueryPlanner, SafetyValidator, ResponseSynthesizer
@@ -248,7 +248,7 @@ def print_judge_trace(response: FinalResponse):
     actions = trace.actions if hasattr(trace, 'actions') else trace
     
     console.print(f"\n[bold cyan]{'═' * 70}[/bold cyan]")
-    console.print("[bold cyan]🎯 KEY DECISION POINTS (Judge Mode)[/bold cyan]", justify="center")
+    console.print("[bold cyan]🎯 KEY DECISION POINTS (Simple Mode)[/bold cyan]", justify="center")
     console.print(f"[bold cyan]{'═' * 70}[/bold cyan]\n")
     console.print("[dim]Showing 5 key agents. Use --verbose for full 12-agent trace.[/dim]\n")
     
@@ -548,7 +548,7 @@ def interactive_mode(orchestrator: NL2SQLOrchestrator, verbose: bool = False, ju
     """
     print_header()
     
-    mode_text = "Judge Mode (key agents)" if judge_mode else "Full Mode (all agents)"
+    mode_text = "Simple Mode (key agents)" if judge_mode else "Full Mode (all agents)"
     compare_text = " + Naive Comparison" if compare_naive else ""
     console.print(f"[bold]Interactive Mode | {mode_text}{compare_text}[/bold]")
     console.print("[dim]Type your questions in natural language. Type 'exit' or 'quit' to stop.[/dim]\n")
@@ -794,8 +794,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python cli.py                              # Interactive mode (Judge Mode)
-  python cli.py -q "How many customers?"     # Single query (Judge Mode)
+  python cli.py                              # Interactive mode (Simple Mode)
+  python cli.py -q "How many customers?"     # Single query (Simple Mode)
   python cli.py -q "..." --verbose           # Single query (Full trace)
   python cli.py -q "..." --full              # Single query (All agents, compact)
   python cli.py --demo                       # Run 5 demo queries
@@ -803,7 +803,7 @@ Examples:
   python cli.py -q "..." --compare-naive     # Compare with naive baseline
 
 Modes:
-  Judge Mode (default): Shows only 5 key agents - cleaner for presentations
+  Simple Mode (default): Shows only 5 key agents - cleaner for presentations
   Full Mode (--full):   Shows all 12 agents in compact format
   Verbose (--verbose):  Shows all 12 agents with Input/Action/Output/Reasoning
   Comparison (--compare-naive): Shows naive baseline alongside multi-agent
