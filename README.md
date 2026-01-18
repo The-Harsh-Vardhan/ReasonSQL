@@ -28,28 +28,35 @@
 
 ## 🚀 Quick Start
 
-### ☁️ Try It Online (Streamlit Cloud)
-**Coming Soon:** Deploy your own instance in 3 clicks! See [DEPLOYMENT.md](DEPLOYMENT.md) for instructions.
-
-### 💻 Local Setup (3 Commands)
+### 💻 Local Setup (Modern Stack)
 
 ```bash
-# 1. Setup
+# 1. Backend Setup
 pip install -r requirements.txt
 cp .env.example .env  # Add GEMINI_API_KEY or GROQ_API_KEY
 
-# 2. Demo Mode
-python cli.py --demo
+# 2. Start FastAPI Backend
+python -m uvicorn backend.api.main:app --port 8000
 
-# 3. Web UI  
-python -m streamlit run frontend/streamlit_app.py
+# 3. Start Next.js Frontend (in new terminal)
+cd frontend-next
+npm install && npm run dev
+# Visit http://localhost:3000
 ```
 
-### 🐳 Docker Setup (One Command)
+### 🎯 Legacy Streamlit UI (Optional)
+
+```bash
+cd frontend/streamlit_legacy
+python -m streamlit run streamlit_app.py
+# Visit http://localhost:8501
+```
+
+### 🐳 Docker Setup (Coming Soon)
 
 ```bash
 docker-compose up
-# Visit http://localhost:8501
+# Visit http://localhost:3000
 ```
 
 ---
@@ -59,12 +66,16 @@ docker-compose up
 ```
 ReasonSQL/
 ├── backend/                # Core Logic
+│   ├── api/                # FastAPI endpoints
 │   ├── agents/             # 12 agent definitions
 │   ├── orchestrator/       # Orchestration logic
+│   ├── adapters/           # Database adapters (SQLite, Postgres)
 │   ├── tools/              # Database tools
 │   └── models/             # Pydantic models
-├── frontend/               # User Interface
-│   └── streamlit_app.py    # Streamlit Web App
+├── frontend-next/          # Next.js Frontend (PRIMARY)
+│   └── app/page.tsx        # Main query interface
+├── frontend/               # Legacy
+│   └── streamlit_legacy/   # Deprecated Streamlit UI
 ├── data/
 │   └── chinook.db          # Sample database
 ├── configs/                # Configuration

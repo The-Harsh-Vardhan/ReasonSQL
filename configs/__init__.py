@@ -3,6 +3,7 @@ from .settings import (
     # Core configuration
     get_llm,
     get_database_uri,
+    get_gemini_key_count,
     DATABASE_PATH,
     MAX_RETRIES,
     DEFAULT_LIMIT,
@@ -22,6 +23,7 @@ __all__ = [
     # Core configuration
     "get_llm",
     "get_database_uri",
+    "get_gemini_key_count",
     "DATABASE_PATH",
     "MAX_RETRIES",
     "DEFAULT_LIMIT",

@@ -26,6 +26,9 @@ from backend.orchestrator import ReasonSQLOrchestrator
 from backend.models import ExecutionStatus, FinalResponse, ReasoningTrace, AgentAction
 from backend.adapters import run_naive_query, format_naive_result_for_display, NAIVE_DISCLAIMER, NAIVE_COMPARISON_LABEL
 
+# API Client for decoupled mode (Step 4 of migration)
+from frontend.api_client import ReasonSQLClient, ExecutionStatusAPI
+
 
 # ============================================================
 # DEMO MODE CONFIGURATION
@@ -774,6 +777,9 @@ def init_session_state():
         # Naive comparison mode - OFF by default (can overwhelm judges)
         'compare_naive': False,
         'naive_result': None,
+        # API Mode - Use FastAPI backend instead of direct orchestrator
+        'use_api_mode': False,  # Toggle in sidebar
+        'api_client': None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1405,6 +1411,20 @@ def render_sidebar():
         
         st.markdown("---")
         
+        # ===== API MODE TOGGLE =====
+        st.markdown("### 🔌 Backend Mode")
+        use_api = st.toggle("Use FastAPI Backend", value=st.session_state.use_api_mode,
+                            help="Route queries through FastAPI (http://localhost:8000) instead of direct orchestrator")
+        st.session_state.use_api_mode = use_api
+        
+        if use_api:
+            st.info("📡 API Mode Active")
+            st.caption("Queries go to FastAPI → Orchestrator")
+        else:
+            st.caption("Direct mode: Orchestrator in-process")
+        
+        st.markdown("---")
+        
         # Quick stats
         st.markdown("### ⚡ Quick Facts")
         col1, col2 = st.columns(2)
@@ -1567,8 +1587,50 @@ def main():
                 st.session_state.naive_result = None
             
             # ===== RUN MULTI-AGENT SYSTEM =====
-            orchestrator = get_orchestrator()
-            response = orchestrator.process_query(query)
+            if st.session_state.use_api_mode:
+                # API MODE: Call FastAPI endpoint
+                if st.session_state.api_client is None:
+                    st.session_state.api_client = ReasonSQLClient()
+                
+                api_response = st.session_state.api_client.query(query)
+                
+                # Convert API response to FinalResponse-like object for compatibility
+                # Create a compatible trace object
+                class APIReasoningTrace:
+                    def __init__(self, api_trace):
+                        self.actions = []
+                        if api_trace:
+                            for a in api_trace.actions:
+                                self.actions.append(type('AgentAction', (), {
+                                    'agent_name': a.agent_name,
+                                    'action': 'Processed',
+                                    'input_summary': 'API call',
+                                    'output_summary': a.summary,
+                                    'reasoning': a.detail,
+                                    'timestamp': None
+                                })())
+                            self.final_status = ExecutionStatus(api_trace.final_status.value)
+                            self.total_time_ms = api_trace.total_time_ms
+                            self.correction_attempts = api_trace.correction_attempts
+                        else:
+                            self.final_status = ExecutionStatus.ERROR
+                            self.total_time_ms = 0
+                            self.correction_attempts = 0
+                
+                # Create FinalResponse-like object
+                response = type('FinalResponse', (), {
+                    'answer': api_response.answer,
+                    'sql_used': api_response.sql_used or "No SQL",
+                    'data_preview': api_response.data_preview,
+                    'row_count': api_response.row_count,
+                    'is_meta_query': api_response.is_meta_query,
+                    'reasoning_trace': APIReasoningTrace(api_response.reasoning_trace),
+                    'warnings': api_response.warnings or []
+                })()
+            else:
+                # DIRECT MODE: Call orchestrator directly
+                orchestrator = get_orchestrator()
+                response = orchestrator.process_query(query)
             
             progress.empty()
             
