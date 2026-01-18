@@ -60,6 +60,7 @@ from datetime import datetime, timedelta
 from config import DATABASE_PATH, VERBOSE, DEFAULT_LIMIT, FORBIDDEN_KEYWORDS
 from models import FinalResponse, ExecutionStatus, ReasoningTrace, AgentAction
 from .llm_client import create_llm_client, LLMError, LLMProvider
+from .json_utils import safe_parse_llm_json, JSONExtractionError
 
 
 # ============================================================
@@ -133,6 +134,11 @@ class RateLimitExceeded(Exception):
 class BatchPipelineState:
     """
     State tracking for batched execution pipeline.
+    
+    CRITICAL INVARIANT:
+    ===================
+    reasoning_trace MUST ALWAYS exist, even for blocked/aborted queries.
+    This ensures FinalResponse can always access it.
     """
     user_query: str
     start_time_ms: float = 0
@@ -147,6 +153,9 @@ class BatchPipelineState:
     # Retry tracking
     retry_count: int = 0
     max_retries: int = 2
+    
+    # Reasoning trace (ALWAYS populated - initialized in process_query)
+    reasoning_trace: Optional['ReasoningTrace'] = field(default=None)
     
     # Agent outputs (populated by batches)
     # BATCH 1: Reasoning & Planning
@@ -258,6 +267,16 @@ class BatchOptimizedOrchestrator:
         state = BatchPipelineState(
             user_query=user_query,
             start_time_ms=time.time() * 1000
+        )
+        
+        # CRITICAL: Initialize reasoning_trace immediately
+        # This ensures it exists even if we abort early
+        state.reasoning_trace = ReasoningTrace(
+            user_query=user_query,
+            actions=[],
+            total_time_ms=0,
+            correction_attempts=0,
+            final_status=ExecutionStatus.SUCCESS  # Will be updated
         )
         
         self._log(f"{'='*60}")
@@ -404,38 +423,33 @@ class BatchOptimizedOrchestrator:
             else:
                 self._log(f"  ✓ {llm_response.provider.value.upper()} call successful")
             
-            # Parse JSON
-            # Extract JSON from response (handle various formats)
-            if "```json" in content:
-                # Markdown code block format
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                # Generic code block
-                content = content.split("```")[1].split("```")[0].strip()
-            else:
-                # Try to extract JSON object from plain text
-                # Look for the first { and last }
-                if "{" in content and "}" in content:
-                    start_idx = content.find("{")
-                    end_idx = content.rfind("}") + 1
-                    content = content[start_idx:end_idx].strip()
+            # SAFE JSON PARSING: Extract first JSON object, ignore extra text
+            try:
+                result, stripped_text = safe_parse_llm_json(content)
+                
+                # Log if extra text was stripped (transparency)
+                if stripped_text:
+                    stripped_preview = stripped_text[:100]
+                    self._log(f"  ℹ️ Stripped {len(stripped_text)} chars of extra text: '{stripped_preview}...'")
+                    # Record in reasoning trace for debugging
+                    if state.reasoning_trace:
+                        state.reasoning_trace.actions.append(
+                            AgentAction(
+                                agent_name=f"{batch_name}_parser",
+                                action="stripped_extra_text",
+                                input_summary=f"LLM response with {len(stripped_text)} chars extra text",
+                                output_summary=f"Stripped {len(stripped_text)} chars: {stripped_preview}...",
+                                reasoning=f"LLM returned JSON + commentary. Stripped {len(stripped_text)} characters."
+                            )
+                        )
+                
+                self._log(f"  ✓ JSON parsed successfully (Total: {state.llm_calls_made}, Remaining: {self.rate_limiter.get_status()['remaining']})")
+                return result
             
-            # Check if content is empty before parsing
-            if not content or content.strip() == "":
-                self._log(f"  ✗ Empty response from LLM")
-                self._log(f"  Raw response: {llm_response.content[:500]}...")
-                raise LLMError("LLM returned empty response")
-            
-            result = json.loads(content)
-            
-            self._log(f"  ✓ API call successful (Total: {state.llm_calls_made}, Remaining: {self.rate_limiter.get_status()['remaining']})")
-            return result
-        
-        except json.JSONDecodeError as e:
-            self._log(f"  ✗ JSON parse error: {e}")
-            self._log(f"  Raw content attempted to parse: '{content[:500]}'...")
-            self._log(f"  Full LLM response: '{llm_response.content[:500]}'...")
-            raise LLMError(f"Failed to parse JSON from LLM response: {e}")
+            except JSONExtractionError as e:
+                self._log(f"  ✗ JSON extraction failed: {e}")
+                self._log(f"  Raw LLM response: '{content[:500]}'...")
+                raise LLMError(f"Failed to extract valid JSON from LLM response: {e}")
         except LLMError as e:
             self._log(f"  ✗ LLM error: {e}")
             raise
@@ -856,7 +870,8 @@ Return JSON:
         else:
             status = ExecutionStatus.SUCCESS
         
-        # Build reasoning trace
+        # Update reasoning trace with final data
+        # Convert trace list to AgentAction objects if needed
         trace_actions = [
             AgentAction(
                 agent_name=t["agent"],
@@ -868,13 +883,22 @@ Return JSON:
             for i, t in enumerate(state.trace)
         ]
         
-        trace = ReasoningTrace(
-            user_query=state.user_query,
-            actions=trace_actions,
-            total_time_ms=int(total_time),
-            correction_attempts=state.retry_count,
-            final_status=status
-        )
+        # Add trace_actions to existing reasoning_trace
+        if state.reasoning_trace:
+            state.reasoning_trace.actions.extend(trace_actions)
+            state.reasoning_trace.total_time_ms = int(total_time)
+            state.reasoning_trace.correction_attempts = state.retry_count
+            state.reasoning_trace.final_status = status
+            trace = state.reasoning_trace
+        else:
+            # Fallback if reasoning_trace wasn't initialized (shouldn't happen)
+            trace = ReasoningTrace(
+                user_query=state.user_query,
+                actions=trace_actions,
+                total_time_ms=int(total_time),
+                correction_attempts=state.retry_count,
+                final_status=status
+            )
         
         sql_used = state.corrected_sql if state.corrected_sql else state.generated_sql
         
@@ -908,6 +932,7 @@ Return JSON:
         """Abort execution with error response."""
         total_time = time.time() * 1000 - state.start_time_ms
         
+        # Convert trace list to AgentAction objects
         trace_actions = [
             AgentAction(
                 agent_name=t["agent"],
@@ -919,27 +944,37 @@ Return JSON:
             for i, t in enumerate(state.trace)
         ]
         
-        trace_actions.append(
-            AgentAction(
-                agent_name="Orchestrator",
-                action="Abort query processing",
-                input_summary="Pipeline state",
-                output_summary=f"ABORTED: {reason}",
-                reasoning=f"ABORTED: {reason}"
-            )
+        # Add abort action
+        abort_action = AgentAction(
+            agent_name="Orchestrator",
+            action="abort_query",
+            input_summary="Pipeline state",
+            output_summary=f"ABORTED: {reason}",
+            reasoning=f"Query processing aborted: {reason}"
         )
         
-        trace = ReasoningTrace(
-            user_query=state.user_query,
-            actions=trace_actions,
-            total_time_ms=int(total_time),
-            correction_attempts=state.retry_count,
-            final_status=ExecutionStatus.BLOCKED
-        )
+        # Update existing reasoning_trace
+        if state.reasoning_trace:
+            state.reasoning_trace.actions.extend(trace_actions)
+            state.reasoning_trace.actions.append(abort_action)
+            state.reasoning_trace.total_time_ms = int(total_time)
+            state.reasoning_trace.correction_attempts = state.retry_count
+            state.reasoning_trace.final_status = ExecutionStatus.BLOCKED
+            trace = state.reasoning_trace
+        else:
+            # Fallback if reasoning_trace wasn't initialized
+            trace_actions.append(abort_action)
+            trace = ReasoningTrace(
+                user_query=state.user_query,
+                actions=trace_actions,
+                total_time_ms=int(total_time),
+                correction_attempts=state.retry_count,
+                final_status=ExecutionStatus.BLOCKED
+            )
         
         return FinalResponse(
-            answer=f"Query aborted: {reason}",
-            sql_used="",
+            answer=f"Query blocked: {reason}",
+            sql_used="Not generated (query blocked)",
             row_count=0,
             reasoning_trace=trace,
             warnings=[reason]

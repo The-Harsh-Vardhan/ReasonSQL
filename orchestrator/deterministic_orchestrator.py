@@ -39,6 +39,8 @@ import re
 from typing import Optional, Tuple, Dict, Any
 from crewai import Crew, Process, Task, Agent
 
+from .json_utils import safe_parse_llm_json, JSONExtractionError
+
 from models.agent_outputs import (
     AgentStatus, PipelineState,
     IntentAnalyzerOutput, IntentType,
@@ -925,22 +927,15 @@ class DeterministicOrchestrator:
         return text.strip()
     
     def _parse_json_from_text(self, text: str) -> Dict[str, Any]:
-        """Try to parse JSON from text that may contain other content."""
-        # Try direct parse
+        """Extract JSON object from agent output text using safe parsing."""
         try:
-            return json.loads(text)
-        except:
-            pass
-        
-        # Try to find JSON in text
-        match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except:
-                pass
-        
-        return {}
+            result, stripped_text = safe_parse_llm_json(text)
+            if stripped_text:
+                print(f"  ℹ️ Stripped {len(stripped_text)} chars of extra text")
+            return result
+        except JSONExtractionError as e:
+            print(f"  ✗ JSON extraction failed: {e}")
+            return {}
     
     # ================================================================
     # OUTPUT PARSING (text → structured)

@@ -86,7 +86,7 @@ def validate_configuration(skip_api_check: bool = False) -> dict:
     config = {}
     
     # Check LLM provider
-    config['llm_provider'] = os.getenv("LLM_PROVIDER", "groq").lower()
+    config['llm_provider'] = os.getenv("LLM_PROVIDER", "gemini").lower()
     if config['llm_provider'] not in ["groq", "gemini"]:
         errors.append(f"LLM_PROVIDER must be 'groq' or 'gemini', got: {config['llm_provider']}")
     
@@ -132,8 +132,8 @@ DATABASE_PATH = os.getenv("DATABASE_PATH", str(DATA_DIR / "chinook.db"))
 # LLM CONFIGURATION
 # =============================================================================
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
-LLM_MODEL = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash-exp")
 
 # =============================================================================
 # SYSTEM SETTINGS

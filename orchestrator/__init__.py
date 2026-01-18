@@ -26,6 +26,12 @@ from .batch_optimized_orchestrator import (
     RateLimitExceeded,
     run_query  # Default run_query uses batch-optimized (5 req/min hard limit)
 )
+from .json_utils import (
+    safe_parse_llm_json,
+    extract_first_json_block,
+    JSONExtractionError,
+    parse_llm_response_with_trace
+)
 
 # Default export: Use batch-optimized for HARD rate limiting and agent batching
 NL2SQLOrchestrator = BatchOptimizedOrchestrator
@@ -57,5 +63,10 @@ __all__ = [
     # Utility functions
     "ReasoningTraceCollector",
     "detect_ambiguous_terms",
-    "is_complex_query"
+    "is_complex_query",
+    # JSON parsing utilities (for extension development)
+    "safe_parse_llm_json",
+    "extract_first_json_block",
+    "JSONExtractionError",
+    "parse_llm_response_with_trace"
 ]

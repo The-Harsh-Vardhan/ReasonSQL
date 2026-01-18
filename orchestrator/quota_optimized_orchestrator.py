@@ -1047,28 +1047,20 @@ Do not include the SQL in your answer."""
     # ============================================================
     
     def _parse_json(self, text: str) -> Dict:
-        """Extract JSON from LLM response."""
+        """Extract JSON from LLM response using safe parsing."""
         try:
-            # Try direct parse
-            return json.loads(text)
-        except:
-            pass
-        
-        # Try to find JSON in response
-        patterns = [
-            r'\{[\s\S]*\}',  # Greedy
-            r'\{[^{}]*\}',   # Non-nested
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                try:
-                    return json.loads(match.group())
-                except:
-                    continue
-        
-        return {}
+            result, stripped_text = safe_parse_llm_json(text)
+            
+            # Log if extra text was stripped
+            if stripped_text and VERBOSE:
+                print(f"  ℹ️ Stripped {len(stripped_text)} chars: '{stripped_text[:100]}...'")
+            
+            return result
+        except JSONExtractionError as e:
+            if VERBOSE:
+                print(f"  ✗ JSON extraction failed: {e}")
+                print(f"  Raw text: '{text[:500]}'...")
+            return {}
     
     def _extract_sql(self, text: str) -> str:
         """Extract SQL from LLM response."""

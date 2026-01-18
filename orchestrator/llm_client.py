@@ -125,60 +125,109 @@ class LLMClient(ABC):
 
 class GeminiClient(LLMClient):
     """
-    Gemini LLM provider implementation.
+    Gemini LLM provider implementation with automatic key rotation.
     
     Uses LiteLLM for Gemini API calls.
-    Detects rate limit and quota errors for fallback triggering.
+    Automatically rotates through multiple API keys when quota is exhausted.
     """
     
     def __init__(self, model: str = "gemini/gemini-2.0-flash-exp", verbose: bool = VERBOSE):
         super().__init__(model, verbose)
         self.provider = LLMProvider.GEMINI
+        
+        # Load all available Gemini API keys
+        import os
+        self.api_keys = []
+        for i in range(1, 10):  # Support up to 9 keys
+            key = os.getenv(f"GEMINI_API_KEY_{i}")
+            if key:
+                self.api_keys.append(key)
+        
+        # Fallback to GOOGLE_API_KEY/GEMINI_API_KEY if no numbered keys
+        if not self.api_keys:
+            main_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            if main_key:
+                self.api_keys.append(main_key)
+        
+        if not self.api_keys:
+            raise ValueError("No Gemini API keys configured")
+        
+        self.current_key_index = 0
+        self.exhausted_keys = set()
+        self._log(f"Loaded {len(self.api_keys)} Gemini API key(s)")
     
     def generate(self, prompt: str, metadata: Dict[str, Any] = None) -> LLMResponse:
-        """Generate response from Gemini."""
-        self._log(f"Calling Gemini ({self.model})...")
+        """Generate response from Gemini with automatic key rotation."""
+        import os
         
-        try:
-            response = completion(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
-            )
-            
-            self.call_count += 1
-            content = response.choices[0].message.content
-            
-            self._log(f"✓ Gemini call successful (Total: {self.call_count})")
-            
-            return LLMResponse(
-                content=content,
-                provider=self.provider,
-                model=self.model,
-                tokens_used=response.usage.total_tokens if hasattr(response, 'usage') else 0
-            )
+        # Try all available keys
+        attempts = 0
+        max_attempts = len(self.api_keys)
         
-        except Exception as e:
-            error_str = str(e).lower()
+        while attempts < max_attempts:
+            # Skip exhausted keys
+            if self.current_key_index in self.exhausted_keys:
+                self._rotate_key()
+                attempts += 1
+                continue
             
-            # Detect rate limit errors
-            if "429" in error_str or "rate limit" in error_str or "quota" in error_str:
-                if "quota" in error_str or "exceeded your current quota" in error_str:
-                    self._log(f"✗ Gemini quota exceeded")
-                    raise QuotaExceededError(f"Gemini quota exhausted: {e}")
+            current_key = self.api_keys[self.current_key_index]
+            key_num = self.current_key_index + 1
+            
+            self._log(f"Calling Gemini ({self.model}) with key #{key_num}...")
+            
+            # Set the API key for this attempt
+            os.environ["GEMINI_API_KEY"] = current_key
+            
+            try:
+                response = completion(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3
+                )
+                
+                self.call_count += 1
+                content = response.choices[0].message.content
+                
+                self._log(f"✓ Gemini call successful with key #{key_num} (Total: {self.call_count})")
+                
+                return LLMResponse(
+                    content=content,
+                    provider=self.provider,
+                    model=self.model,
+                    tokens_used=response.usage.total_tokens if hasattr(response, 'usage') else 0
+                )
+            
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # Detect quota/rate limit errors - rotate key
+                if "429" in error_str or "rate limit" in error_str or "quota" in error_str or "403" in error_str or "forbidden" in error_str:
+                    if "quota" in error_str or "exceeded your current quota" in error_str or "403" in error_str:
+                        self._log(f"✗ Gemini key #{key_num} quota exhausted, rotating...")
+                        self.exhausted_keys.add(self.current_key_index)
+                        self._rotate_key()
+                        attempts += 1
+                        continue
+                    else:
+                        self._log(f"✗ Gemini key #{key_num} rate limit hit, rotating...")
+                        self.exhausted_keys.add(self.current_key_index)
+                        self._rotate_key()
+                        attempts += 1
+                        continue
+                
+                # Other errors - don't rotate, just fail
                 else:
-                    self._log(f"✗ Gemini rate limit hit")
-                    raise RateLimitError(f"Gemini rate limit exceeded: {e}")
-            
-            # Detect auth errors
-            elif "403" in error_str or "forbidden" in error_str:
-                self._log(f"✗ Gemini auth error")
-                raise QuotaExceededError(f"Gemini API access denied: {e}")
-            
-            # Other errors
-            else:
-                self._log(f"✗ Gemini error: {e}")
-                raise LLMError(f"Gemini API error: {e}")
+                    self._log(f"✗ Gemini error with key #{key_num}: {e}")
+                    raise LLMError(f"Gemini API error: {e}")
+        
+        # All keys exhausted
+        self._log(f"✗ All {len(self.api_keys)} Gemini API keys exhausted")
+        raise QuotaExceededError(f"All {len(self.api_keys)} Gemini API keys exhausted")
+    
+    def _rotate_key(self):
+        """Rotate to next available key."""
+        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
 
 
 # ============================================================
@@ -261,7 +310,7 @@ class MultiProviderLLM:
         primary: str = "gemini",
         fallback: str = "groq",
         gemini_model: str = "gemini/gemini-2.0-flash-exp",
-        groq_model: str = "groq/llama-3.3-70b-versatile",
+        groq_model: str = "groq/llama-3.1-8b-instant",
         verbose: bool = VERBOSE
     ):
         self.verbose = verbose

@@ -119,6 +119,7 @@ FINAL ANSWER + SQL + Reasoning Trace
 3. **LIMIT Enforced** - Row limits required
 4. **Safety Gate** - Must approve before execution
 5. **Graceful Failover** - Gemini → Groq automatic
+6. **🆕 Multi-Key Rotation** - 4 Gemini keys with auto-rotation on quota exhaustion
 
 ---
 
@@ -145,6 +146,16 @@ nl2sql_system/
 ├── cli.py                  # CLI
 └── data/chinook.db         # Sample database
 ```
+
+---
+
+## 📖 Documentation
+
+- **[Agent Pipeline](AGENT_PIPELINE.md)** - Complete visualization of 12-agent workflow
+- [Batch Orchestrator Design](docs/BATCH_ORCHESTRATOR_DESIGN.md) - Technical architecture
+- [Quota Optimization](docs/QUOTA_OPTIMIZATION.md) - Rate limit handling
+- [JSON Parsing Fix](docs/JSON_PARSING_FIX.md) - LLM response parsing
+- [Gemini Key Rotation](key_rotation_summary.py) - Multi-key management
 
 ---
 
