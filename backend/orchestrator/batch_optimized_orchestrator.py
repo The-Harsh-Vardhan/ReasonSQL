@@ -57,7 +57,7 @@ from dataclasses import dataclass, field
 from collections import deque
 from datetime import datetime, timedelta
 
-from configs import DATABASE_PATH, VERBOSE, DEFAULT_LIMIT, FORBIDDEN_KEYWORDS
+from configs import DATABASE_PATH, VERBOSE, DEFAULT_LIMIT, FORBIDDEN_KEYWORDS, get_gemini_key_count
 from backend.models import FinalResponse, ExecutionStatus, ReasoningTrace, AgentAction
 from .llm_client import create_llm_client, LLMError, LLMProvider
 from .json_utils import safe_parse_llm_json, JSONExtractionError
@@ -245,7 +245,14 @@ class BatchOptimizedOrchestrator:
     def __init__(self, verbose: bool = VERBOSE):
         self.verbose = verbose
         self.llm = create_llm_client(primary="gemini", fallback="groq", verbose=verbose)
-        self.rate_limiter = RateLimiter(max_requests=5, window_seconds=60)
+        
+        # Scale rate limit by number of available keys (5 RPM per key)
+        key_count = get_gemini_key_count()
+        total_limit = 5 * key_count
+        if key_count > 1 and self.verbose:
+            print(f"[Orchestrator] 🔑 Multi-key rotation active: {key_count} keys found. Limit increased to {total_limit} RPM.")
+            
+        self.rate_limiter = RateLimiter(max_requests=total_limit, window_seconds=60)
     
     def _log(self, message: str):
         if self.verbose:

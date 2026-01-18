@@ -203,6 +203,28 @@ def get_database_uri() -> str:
     return f"sqlite:///{DATABASE_PATH}"
 
 
+def get_gemini_key_count() -> int:
+    """Count number of configured Gemini API keys (GEMINI_API_KEY_1..9 + fallback)."""
+    count = 0
+    # Check numbered keys
+    for i in range(1, 10):
+        if os.getenv(f"GEMINI_API_KEY_{i}"):
+            count += 1
+            
+    # Check standard keys if no numbered keys found
+    if count == 0 and (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")):
+        count = 1
+        
+    # If numbered keys exist AND standard key exists, standard key is usually 
+    # included as fallback in GeminiClient, so total is effectively count.
+    # But GeminiClient logic is: numbered keys FIRST, then standard key if no numbered keys.
+    # Wait, looking at llm_client.py lines 140-150:
+    # It adds numbered keys. If NONE, it adds standard key.
+    # So effective count is exactly as calculated above.
+    
+    return max(1, count)
+
+
 # Agent-specific prompts
 AGENT_PROMPTS = {
     # ============================================================
