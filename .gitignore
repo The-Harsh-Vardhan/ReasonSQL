@@ -110,3 +110,21 @@ htmlcov/
 # Streamlit
 # --------------------------
 .streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# --------------------------
+# Docker
+# --------------------------
+docker-compose.override.yml
+.dockerignore
+
+# --------------------------
+# Temporary & Test Files
+# --------------------------
+*.tmp
+*.temp
+test_*.db
+temp_*
+scratch_*
+
+# Note: debug_*.txt files in Extras/ are tracked for reference
