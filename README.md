@@ -1,4 +1,4 @@
-# 🧠 NL2SQL Multi-Agent System
+# NL2SQL Multi-Agent System
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CrewAI](https://img.shields.io/badge/Framework-CrewAI-green.svg)](https://github.com/joaomdmoura/crewai)
