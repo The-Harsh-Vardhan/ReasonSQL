@@ -3,7 +3,8 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CrewAI](https://img.shields.io/badge/Framework-CrewAI-green.svg)](https://github.com/joaomdmoura/crewai)
 [![LLM: Gemini/Groq](https://img.shields.io/badge/LLM-Gemini%20%7C%20Groq-purple.svg)](https://ai.google.dev/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-Deployed-FF4B4B.svg)](https://streamlit.io)
+[![Vercel](https://img.shields.io/badge/Vercel-Deployed-000000.svg)](https://vercel.com)
+[![Render](https://img.shields.io/badge/Render-Backend-46E3B7.svg)](https://render.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF.svg)](https://github.com/features/actions)
 
@@ -100,9 +101,11 @@ ReasonSQL/
 
 This project is ready to deploy on:
 
-- **Streamlit Cloud** - Free hosting for public repos ([Guide](DEPLOYMENT.md#streamlit-cloud-deployment))
-- **Docker** - Containerized deployment ([Guide](DEPLOYMENT.md#docker-deployment))
-- **Local** - Run on your machine ([Guide](DEPLOYMENT.md#local-deployment))
+| Platform | Component | Free Tier | Guide |
+|----------|-----------|-----------|-------|
+| **Vercel** | Next.js Frontend | ✅ Unlimited | [Guide](DEPLOYMENT.md#vercel-deployment) |
+| **Render** | FastAPI Backend | ✅ 750 hrs/mo | [Guide](DEPLOYMENT.md#render-deployment) |
+| **Docker** | Full Stack | Self-hosted | [Guide](DEPLOYMENT.md#docker-deployment) |
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
 

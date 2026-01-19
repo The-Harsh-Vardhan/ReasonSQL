@@ -1,0 +1,29 @@
+# Render Blueprint for ReasonSQL Backend
+# Deploy: https://render.com/deploy
+
+services:
+  - type: web
+    name: reasonsql-api
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false  # Set via Render dashboard
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: LLM_MODEL
+        value: gemini/gemini-2.0-flash
+      - key: DATABASE_PATH
+        value: /data/chinook.db
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: ALLOWED_ORIGINS
+        value: "*"  # Update with your Vercel domain
+    disk:
+      name: sqlite-data
+      mountPath: /data
+      sizeGB: 1
+    healthCheckPath: /health

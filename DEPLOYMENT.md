@@ -1,12 +1,125 @@
 # 🚀 Deployment Guide
 
-This guide covers deploying the NL2SQL Multi-Agent System to various platforms.
+This guide covers deploying the ReasonSQL Multi-Agent System to various platforms.
 
 ## 📋 Table of Contents
-- [Streamlit Cloud Deployment](#streamlit-cloud-deployment)
+- [Vercel Deployment (Frontend)](#vercel-deployment) ⭐ **Recommended**
+- [Render Deployment (Backend)](#render-deployment) ⭐ **Recommended**
+- [Streamlit Cloud Deployment](#streamlit-cloud-deployment) (Legacy)
 - [Local Deployment](#local-deployment)
 - [Docker Deployment](#docker-deployment)
 - [Environment Variables](#environment-variables)
+
+---
+
+## 🔷 Vercel Deployment
+
+Deploy the **Next.js frontend** to Vercel (100% free, unlimited).
+
+### Prerequisites
+- GitHub account with your forked repository
+- Vercel account (free at [vercel.com](https://vercel.com))
+
+### Step-by-Step Instructions
+
+#### 1. Sign in to Vercel
+1. Go to [vercel.com](https://vercel.com)
+2. Click "Sign Up" → Sign in with GitHub
+
+#### 2. Import Repository
+1. Click "Add New..." → "Project"
+2. Select your `ReasonSQL` repository
+3. Configure:
+   - **Root Directory**: `frontend-next`
+   - Click "Edit" next to Root Directory and type `frontend-next`
+
+#### 3. Configure Environment Variables
+Add this environment variable:
+```
+NEXT_PUBLIC_API_URL = https://your-backend-name.onrender.com
+```
+> ⚠️ Replace with your actual Render backend URL (deploy backend first!)
+
+#### 4. Deploy
+1. Click "Deploy"
+2. Wait 1-2 minutes
+3. Your frontend is live at: `https://your-project.vercel.app`
+
+### Post-Deployment
+- Enable automatic deployments for the `main` branch
+- Add a custom domain if desired (free on Vercel)
+
+---
+
+## 🟢 Render Deployment
+
+Deploy the **FastAPI backend** to Render (free tier: 750 hrs/month).
+
+### Prerequisites
+- GitHub account with your forked repository
+- Render account (free at [render.com](https://render.com))
+- Gemini API key (free at [makersuite.google.com](https://makersuite.google.com/app/apikey))
+
+### Option 1: One-Click Deploy (Blueprint)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+
+The repository includes a `render.yaml` blueprint for automatic configuration.
+
+### Option 2: Manual Setup
+
+#### 1. Sign in to Render
+1. Go to [render.com](https://render.com)
+2. Sign up with GitHub
+
+#### 2. Create Web Service
+1. Click "New" → "Web Service"
+2. Connect your `ReasonSQL` repository
+3. Configure:
+   - **Name**: `reasonsql-api`
+   - **Region**: Oregon (US West)
+   - **Branch**: `main`
+   - **Runtime**: Python 3
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT`
+
+#### 3. Configure Environment Variables
+Add these in the "Environment" section:
+
+| Key | Value |
+|-----|-------|
+| `GEMINI_API_KEY` | Your Gemini API key |
+| `LLM_PROVIDER` | `gemini` |
+| `LLM_MODEL` | `gemini/gemini-2.0-flash` |
+| `DATABASE_PATH` | `/data/chinook.db` |
+| `ALLOWED_ORIGINS` | `https://your-frontend.vercel.app` |
+
+#### 4. Add Persistent Disk (for SQLite)
+1. Scroll to "Disk" section
+2. Click "Add Disk"
+3. Configure:
+   - **Name**: `sqlite-data`
+   - **Mount Path**: `/data`
+   - **Size**: 1 GB
+
+#### 5. Upload Database
+After first deploy, use Render Shell to copy the database:
+```bash
+# In Render Shell
+cp /opt/render/project/src/data/chinook.db /data/chinook.db
+```
+
+#### 6. Deploy
+1. Click "Create Web Service"
+2. Wait 3-5 minutes for initial build
+3. Your API is live at: `https://reasonsql-api.onrender.com`
+
+### Post-Deployment Checklist
+- [ ] Test health endpoint: `https://your-api.onrender.com/health`
+- [ ] Update frontend's `NEXT_PUBLIC_API_URL` with your Render URL
+- [ ] Redeploy frontend on Vercel
+
+> ⚠️ **Note**: Render's free tier puts the service to sleep after 15 minutes of inactivity. First request after sleep takes ~30 seconds.
 
 ---
 
