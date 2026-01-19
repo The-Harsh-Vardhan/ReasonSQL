@@ -10,17 +10,64 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      # ===========================================
+      # PRIMARY: Gemini API Keys (for key rotation)
+      # ===========================================
       - key: GEMINI_API_KEY
         sync: false  # Set via Render dashboard
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_3
+        sync: false
+      - key: GEMINI_API_KEY_4
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      
+      # ===========================================
+      # FALLBACK: Groq API Key
+      # ===========================================
+      - key: GROQ_API_KEY
+        sync: false
+      
+      # ===========================================
+      # LLM Configuration
+      # ===========================================
       - key: LLM_PROVIDER
         value: gemini
       - key: LLM_MODEL
-        value: gemini/gemini-2.0-flash
+        value: gemini/gemini-2.0-flash-exp
+      - key: GROQ_FALLBACK_MODEL
+        value: llama-3.1-8b-instant
+      
+      # ===========================================
+      # Database & System Settings
+      # ===========================================
       - key: DATABASE_PATH
-        value: ./data/chinook.db  # Uses bundled sample database
+        value: ./data/chinook.db
+      - key: MAX_RETRIES
+        value: "3"
+      - key: DEFAULT_LIMIT
+        value: "100"
+      - key: VERBOSE
+        value: "false"
+      
+      # ===========================================
+      # Token Limits (Quota Protection)
+      # ===========================================
+      - key: MAX_LLM_TOKENS
+        value: "256"
+      - key: MAX_LLM_CALLS_PER_QUERY
+        value: "5"
+      
+      # ===========================================
+      # CORS & Runtime
+      # ===========================================
       - key: PYTHON_VERSION
         value: "3.11"
       - key: ALLOWED_ORIGINS
         value: "*"  # Update with your Vercel domain after deployment
+    
     healthCheckPath: /health
-
