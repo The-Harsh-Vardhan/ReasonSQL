@@ -17,13 +17,10 @@ services:
       - key: LLM_MODEL
         value: gemini/gemini-2.0-flash
       - key: DATABASE_PATH
-        value: /data/chinook.db
+        value: ./data/chinook.db  # Uses bundled sample database
       - key: PYTHON_VERSION
         value: "3.11"
       - key: ALLOWED_ORIGINS
-        value: "*"  # Update with your Vercel domain
-    disk:
-      name: sqlite-data
-      mountPath: /data
-      sizeGB: 1
+        value: "*"  # Update with your Vercel domain after deployment
     healthCheckPath: /health
+
