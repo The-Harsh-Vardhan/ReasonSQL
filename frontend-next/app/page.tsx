@@ -67,6 +67,22 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: query.trim() }),
       });
+
+      // Handle HTTP errors gracefully
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: res.statusText }));
+        setResponse({
+          success: false,
+          answer: errorData.detail || `Server error: ${res.status} ${res.statusText}`,
+          error: `HTTP ${res.status}: ${errorData.detail || res.statusText}`,
+          row_count: 0,
+          is_meta_query: false,
+          reasoning_trace: { actions: [], final_status: "error", correction_attempts: 0 },
+          warnings: res.status === 503 ? ["Backend database is not connected. Please check server configuration."] : [],
+        });
+        return;
+      }
+
       const data = await res.json();
       setResponse(data);
 

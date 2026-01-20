@@ -8,7 +8,7 @@ services:
     region: oregon
     plan: free
     rootDir: ""  # Explicitly use repo root (where requirements.txt is)
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python setup.py
     startCommand: uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       # ===========================================
