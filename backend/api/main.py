@@ -40,14 +40,44 @@ from configs import DATABASE_PATH, LLM_PROVIDER
 
 _database_registry: Dict[str, Dict[str, Any]] = {}
 
+# Chinook database download URL
+CHINOOK_DB_URL = "https://github.com/lerocha/chinook-database/raw/master/ChinookDatabase/DataSources/Chinook_Sqlite.sqlite"
+
+
+def _ensure_database_exists() -> bool:
+    """Download the Chinook database if it doesn't exist (for ephemeral filesystems like Render)."""
+    import urllib.request
+    from pathlib import Path
+    
+    db_path = Path(DATABASE_PATH)
+    
+    # Create data directory if needed
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if db_path.exists():
+        print(f"[API] Database already exists at {db_path}")
+        return True
+    
+    print(f"[API] Database not found. Downloading Chinook database...")
+    try:
+        urllib.request.urlretrieve(CHINOOK_DB_URL, db_path)
+        print(f"[API] Database downloaded successfully ({db_path.stat().st_size} bytes)")
+        return True
+    except Exception as e:
+        print(f"[API] ERROR: Failed to download database: {e}")
+        return False
+
 
 def _init_default_database():
     """Register default SQLite database on startup."""
+    # Ensure database exists (download if needed for Render's ephemeral filesystem)
+    db_exists = _ensure_database_exists()
+    
     _database_registry["default"] = {
         "id": "default",
         "type": DatabaseType.SQLITE,
         "file_path": DATABASE_PATH,
-        "connected": os.path.exists(DATABASE_PATH)
+        "connected": db_exists and os.path.exists(DATABASE_PATH)
     }
 
 
@@ -60,7 +90,8 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup
     _init_default_database()
-    print(f"[API] ReasonSQL API started. Default DB: {DATABASE_PATH}")
+    db_status = "connected" if _database_registry.get("default", {}).get("connected") else "NOT connected"
+    print(f"[API] ReasonSQL API started. Default DB: {DATABASE_PATH} ({db_status})")
     yield
     # Shutdown
     print("[API] ReasonSQL API shutting down.")
