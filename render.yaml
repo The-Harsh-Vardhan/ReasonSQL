@@ -46,6 +46,10 @@ services:
       # ===========================================
       # Database & System Settings
       # ===========================================
+      # PostgreSQL/Supabase connection (recommended for production)
+      - key: DATABASE_URL
+        sync: false  # Set via Render dashboard (e.g., postgresql://user:pass@db.xxx.supabase.co:5432/postgres)
+      # SQLite fallback for local development (ignored if DATABASE_URL is set)
       - key: DATABASE_PATH
         value: ./data/chinook.db
       - key: MAX_RETRIES

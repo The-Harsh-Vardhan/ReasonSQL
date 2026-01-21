@@ -58,6 +58,7 @@ from collections import deque
 from datetime import datetime, timedelta
 
 from configs import DATABASE_PATH, VERBOSE, DEFAULT_LIMIT, FORBIDDEN_KEYWORDS, get_gemini_key_count
+from backend.db_connection import get_connection_context, get_db_type
 from backend.models import FinalResponse, ExecutionStatus, ReasoningTrace, AgentAction
 from .llm_client import create_llm_client, LLMError, LLMProvider
 from .json_utils import safe_parse_llm_json, JSONExtractionError
@@ -609,27 +610,44 @@ Return JSON in this EXACT format:
     def _deterministic_schema_exploration(self, state: BatchPipelineState) -> BatchPipelineState:
         """SchemaExplorer: Pure database introspection."""
         try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            cursor = conn.cursor()
+            db_type = get_db_type()
             
-            # Get all tables
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = [row[0] for row in cursor.fetchall()]
-            
-            # Build schema context
-            schema_parts = []
-            for table in tables:
-                cursor.execute(f"PRAGMA table_info({table});")
-                columns = cursor.fetchall()
-                col_str = ", ".join([f"{c[1]} {c[2]}" for c in columns])
-                schema_parts.append(f"{table}({col_str})")
-            
-            state.schema_context = "; ".join(schema_parts)
-            conn.close()
-            
-            state.add_trace("SchemaExplorer",
-                           f"Found {len(tables)} tables",
-                           state.schema_context[:200] + "...")
+            with get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                # Get all tables
+                if db_type == "sqlite":
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                    tables = [row[0] for row in cursor.fetchall()]
+                else:
+                    cursor.execute("""
+                        SELECT table_name FROM information_schema.tables 
+                        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                    """)
+                    tables = [row[0] if isinstance(row, tuple) else row['table_name'] for row in cursor.fetchall()]
+                
+                # Build schema context
+                schema_parts = []
+                for table in tables:
+                    if db_type == "sqlite":
+                        cursor.execute(f"PRAGMA table_info({table});")
+                        columns = cursor.fetchall()
+                        col_str = ", ".join([f"{c[1]} {c[2]}" for c in columns])
+                    else:
+                        cursor.execute("""
+                            SELECT column_name, data_type FROM information_schema.columns
+                            WHERE table_schema = 'public' AND table_name = %s
+                            ORDER BY ordinal_position
+                        """, (table,))
+                        columns = cursor.fetchall()
+                        col_str = ", ".join([f"{c[0] if isinstance(c, tuple) else c['column_name']} {c[1] if isinstance(c, tuple) else c['data_type']}" for c in columns])
+                    schema_parts.append(f"{table}({col_str})")
+                
+                state.schema_context = "; ".join(schema_parts)
+                
+                state.add_trace("SchemaExplorer",
+                               f"Found {len(tables)} tables",
+                               state.schema_context[:200] + "...")
         except Exception as e:
             state.add_trace("SchemaExplorer", f"Error: {e}", "")
         
@@ -638,19 +656,18 @@ Return JSON in this EXACT format:
     def _deterministic_data_exploration(self, state: BatchPipelineState) -> BatchPipelineState:
         """DataExplorer: Sample data from relevant tables."""
         try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            cursor = conn.cursor()
-            
-            for table in state.relevant_tables[:3]:  # Limit to 3 tables
-                cursor.execute(f"SELECT * FROM {table} LIMIT 3;")
-                samples = cursor.fetchall()
-                state.data_samples[table] = [list(row) for row in samples]
-            
-            conn.close()
-            
-            state.add_trace("DataExplorer",
-                           f"Sampled {len(state.data_samples)} tables",
-                           str(list(state.data_samples.keys())))
+            with get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                for table in state.relevant_tables[:3]:  # Limit to 3 tables
+                    cursor.execute(f"SELECT * FROM {table} LIMIT 3;")
+                    samples = cursor.fetchall()
+                    # Handle both tuple and dict row formats
+                    state.data_samples[table] = [list(row) if isinstance(row, tuple) else list(row.values()) for row in samples]
+                
+                state.add_trace("DataExplorer",
+                               f"Sampled {len(state.data_samples)} tables",
+                               str(list(state.data_samples.keys())))
         except Exception as e:
             state.add_trace("DataExplorer", f"Error: {e}", "")
         
@@ -697,19 +714,19 @@ Return JSON in this EXACT format:
         sql = state.corrected_sql if state.corrected_sql else state.generated_sql
         
         try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            cursor = conn.cursor()
-            cursor.execute(sql)
-            results = cursor.fetchall()
-            conn.close()
-            
-            state.execution_result = [list(row) for row in results]
-            state.row_count = len(results)
-            state.execution_error = ""
-            
-            state.add_trace("SQLExecutor",
-                           f"✓ Success: {state.row_count} rows",
-                           sql)
+            with get_connection_context() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql)
+                results = cursor.fetchall()
+                
+                # Handle both tuple and dict row formats
+                state.execution_result = [list(row) if isinstance(row, tuple) else list(row.values()) for row in results]
+                state.row_count = len(results)
+                state.execution_error = ""
+                
+                state.add_trace("SQLExecutor",
+                               f"✓ Success: {state.row_count} rows",
+                               sql)
         except Exception as e:
             state.execution_error = str(e)
             state.execution_result = None

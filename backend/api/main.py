@@ -31,7 +31,8 @@ from .schemas import (
 # Import orchestrator (backend logic)
 from backend.orchestrator import BatchOptimizedOrchestrator
 from backend.models import ExecutionStatus
-from configs import DATABASE_PATH, LLM_PROVIDER
+from backend.db_connection import get_db_type, test_connection
+from configs import DATABASE_PATH, LLM_PROVIDER, DATABASE_URL
 
 
 # ============================================================
@@ -45,7 +46,12 @@ CHINOOK_DB_URL = "https://github.com/lerocha/chinook-database/raw/master/Chinook
 
 
 def _ensure_database_exists() -> bool:
-    """Download the Chinook database if it doesn't exist (for ephemeral filesystems like Render)."""
+    """Download the Chinook database if it doesn't exist (for SQLite only)."""
+    # Skip download if using PostgreSQL
+    if get_db_type() == "postgresql":
+        print("[API] Using PostgreSQL database, skipping SQLite download")
+        return True
+    
     import urllib.request
     from pathlib import Path
     
@@ -69,16 +75,36 @@ def _ensure_database_exists() -> bool:
 
 
 def _init_default_database():
-    """Register default SQLite database on startup."""
-    # Ensure database exists (download if needed for Render's ephemeral filesystem)
-    db_exists = _ensure_database_exists()
+    """Register default database on startup (PostgreSQL or SQLite)."""
+    db_type = get_db_type()
     
-    _database_registry["default"] = {
-        "id": "default",
-        "type": DatabaseType.SQLITE,
-        "file_path": DATABASE_PATH,
-        "connected": db_exists and os.path.exists(DATABASE_PATH)
-    }
+    if db_type == "postgresql":
+        # PostgreSQL (Supabase) mode
+        print("[API] Initializing PostgreSQL database (Supabase)...")
+        conn_status = test_connection()
+        
+        _database_registry["default"] = {
+            "id": "default",
+            "type": DatabaseType.POSTGRES,
+            "connection_string": DATABASE_URL[:50] + "..." if DATABASE_URL else None,  # Masked
+            "connected": conn_status.get("connected", False),
+            "table_count": conn_status.get("table_count", 0)
+        }
+        
+        if conn_status.get("connected"):
+            print(f"[API] ✓ PostgreSQL connected with {conn_status.get('table_count', 0)} tables")
+        else:
+            print(f"[API] ✗ PostgreSQL connection failed: {conn_status.get('error', 'Unknown error')}")
+    else:
+        # SQLite mode
+        db_exists = _ensure_database_exists()
+        
+        _database_registry["default"] = {
+            "id": "default",
+            "type": DatabaseType.SQLITE,
+            "file_path": DATABASE_PATH,
+            "connected": db_exists and os.path.exists(DATABASE_PATH)
+        }
 
 
 # ============================================================

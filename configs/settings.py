@@ -126,7 +126,21 @@ DATA_DIR = BASE_DIR / "data"
 # DATABASE CONFIGURATION
 # =============================================================================
 
+# PostgreSQL connection string (for Supabase/cloud deployments)
+# Format: postgresql://user:password@host:port/database
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+# SQLite database path (for local development)
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(DATA_DIR / "chinook.db"))
+
+# Auto-detect database type
+def get_db_type() -> str:
+    """Detect database type from environment variables."""
+    if DATABASE_URL and (DATABASE_URL.startswith("postgres") or DATABASE_URL.startswith("postgresql")):
+        return "postgresql"
+    return "sqlite"
+
+DATABASE_TYPE = get_db_type()
 
 # =============================================================================
 # LLM CONFIGURATION

@@ -13,6 +13,7 @@ from backend.models import (
     ColumnInfo, TableInfo, ForeignKeyRelation, SchemaContext,
     ExecutionResult, ValidationResult, ExecutionStatus
 )
+from backend.db_connection import get_connection_context, get_db_type, execute_query as db_execute
 from configs import DATABASE_PATH, DEFAULT_LIMIT, FORBIDDEN_KEYWORDS, MAX_RESULT_ROWS
 
 
@@ -42,34 +43,69 @@ class SchemaInspectorTool(BaseTool):
     def _run(self, table_name: Optional[str] = None) -> str:
         """Execute schema inspection."""
         try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            cursor = conn.cursor()
-            
-            if table_name:
-                # Inspect specific table
-                result = self._inspect_table(cursor, table_name)
-            else:
-                # Inspect entire schema
-                result = self._inspect_full_schema(cursor)
-            
-            conn.close()
-            return result
+            with get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                if table_name:
+                    # Inspect specific table
+                    result = self._inspect_table(cursor, table_name)
+                else:
+                    # Inspect entire schema
+                    result = self._inspect_full_schema(cursor)
+                
+                return result
             
         except Exception as e:
             return f"Error inspecting schema: {str(e)}"
     
-    def _inspect_table(self, cursor: sqlite3.Cursor, table_name: str) -> str:
+    def _inspect_table(self, cursor, table_name: str) -> str:
         """Inspect a specific table."""
-        # Get column info
-        cursor.execute(f"PRAGMA table_info({table_name})")
-        columns = cursor.fetchall()
+        db_type = get_db_type()
         
-        if not columns:
-            return f"Table '{table_name}' not found in database."
-        
-        # Get foreign keys
-        cursor.execute(f"PRAGMA foreign_key_list({table_name})")
-        foreign_keys = cursor.fetchall()
+        if db_type == "sqlite":
+            # Get column info via PRAGMA
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            columns = cursor.fetchall()
+            
+            if not columns:
+                return f"Table '{table_name}' not found in database."
+            
+            # Get foreign keys
+            cursor.execute(f"PRAGMA foreign_key_list({table_name})")
+            foreign_keys = cursor.fetchall()
+        else:
+            # PostgreSQL: Use information_schema
+            cursor.execute("""
+                SELECT column_name, data_type, is_nullable = 'NO', NULL, NULL, 
+                       CASE WHEN pk.column_name IS NOT NULL THEN 1 ELSE 0 END as is_pk
+                FROM information_schema.columns c
+                LEFT JOIN (
+                    SELECT kcu.column_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu 
+                        ON tc.constraint_name = kcu.constraint_name
+                    WHERE tc.constraint_type = 'PRIMARY KEY' 
+                        AND tc.table_name = %s
+                ) pk ON c.column_name = pk.column_name
+                WHERE c.table_schema = 'public' AND c.table_name = %s
+                ORDER BY c.ordinal_position
+            """, (table_name, table_name))
+            columns = cursor.fetchall()
+            
+            if not columns:
+                return f"Table '{table_name}' not found in database."
+            
+            # Get foreign keys for PostgreSQL
+            cursor.execute("""
+                SELECT 0, 0, ccu.table_name, kcu.column_name, ccu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu 
+                    ON tc.constraint_name = kcu.constraint_name
+                JOIN information_schema.constraint_column_usage ccu 
+                    ON tc.constraint_name = ccu.constraint_name
+                WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = %s
+            """, (table_name,))
+            foreign_keys = cursor.fetchall()
         
         # Get row count
         cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
@@ -90,10 +126,19 @@ class SchemaInspectorTool(BaseTool):
         
         return "\n".join(output)
     
-    def _inspect_full_schema(self, cursor: sqlite3.Cursor) -> str:
+    def _inspect_full_schema(self, cursor) -> str:
         """Inspect the entire database schema."""
+        db_type = get_db_type()
+        
         # Get all tables
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        if db_type == "sqlite":
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        else:
+            cursor.execute("""
+                SELECT table_name as name FROM information_schema.tables 
+                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                ORDER BY table_name
+            """)
         tables = cursor.fetchall()
         
         output = ["=== DATABASE SCHEMA ===\n"]
@@ -105,13 +150,28 @@ class SchemaInspectorTool(BaseTool):
             if table_name.startswith('sqlite_'):
                 continue
                 
-            # Get column info
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = cursor.fetchall()
-            
-            # Get foreign keys
-            cursor.execute(f"PRAGMA foreign_key_list({table_name})")
-            foreign_keys = cursor.fetchall()
+            # Get column info (use database-specific queries)
+            if db_type == "sqlite":
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = cursor.fetchall()
+                cursor.execute(f"PRAGMA foreign_key_list({table_name})")
+                foreign_keys = cursor.fetchall()
+            else:
+                cursor.execute("""
+                    SELECT column_name, data_type, is_nullable = 'NO', NULL, NULL, 0
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = %s
+                    ORDER BY ordinal_position
+                """, (table_name,))
+                columns = cursor.fetchall()
+                cursor.execute("""
+                    SELECT 0, 0, ccu.table_name, kcu.column_name, ccu.column_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+                    JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
+                    WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = %s
+                """, (table_name,))
+                foreign_keys = cursor.fetchall()
             
             # Get row count
             cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
@@ -238,22 +298,23 @@ class SQLExecutorTool(BaseTool):
         try:
             start_time = time.time()
             
-            conn = sqlite3.connect(DATABASE_PATH)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            
-            execution_time = (time.time() - start_time) * 1000
-            
-            # Get column names
-            column_names = [description[0] for description in cursor.description] if cursor.description else []
-            
-            # Convert to list of dicts
-            data = [dict(row) for row in rows]
-            
-            conn.close()
+            with get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute(sql)
+                rows = cursor.fetchall()
+                
+                execution_time = (time.time() - start_time) * 1000
+                
+                # Get column names
+                column_names = [description[0] for description in cursor.description] if cursor.description else []
+                
+                # Convert to list of dicts (handle both SQLite Row and PostgreSQL RealDictCursor)
+                db_type = get_db_type()
+                if db_type == "sqlite":
+                    data = [dict(row) for row in rows]
+                else:
+                    data = [dict(row) if hasattr(row, 'keys') else dict(zip(column_names, row)) for row in rows]
             
             # Format result
             row_count = len(data)
@@ -303,32 +364,35 @@ class SQLExecutorTool(BaseTool):
         try:
             start_time = time.time()
             
-            conn = sqlite3.connect(DATABASE_PATH)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+            with get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute(sql)
+                rows = cursor.fetchall()
+                
+                execution_time = (time.time() - start_time) * 1000
+                
+                column_names = [description[0] for description in cursor.description] if cursor.description else []
+                
+                # Handle both SQLite and PostgreSQL row formats
+                db_type = get_db_type()
+                if db_type == "sqlite":
+                    data = [dict(row) for row in rows]
+                else:
+                    data = [dict(row) if hasattr(row, 'keys') else dict(zip(column_names, row)) for row in rows]
+                
+                status = ExecutionStatus.SUCCESS if data else ExecutionStatus.EMPTY
+                
+                return ExecutionResult(
+                    status=status,
+                    sql=sql,
+                    data=data,
+                    row_count=len(data),
+                    column_names=column_names,
+                    execution_time_ms=execution_time
+                )
             
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            
-            execution_time = (time.time() - start_time) * 1000
-            
-            column_names = [description[0] for description in cursor.description] if cursor.description else []
-            data = [dict(row) for row in rows]
-            
-            conn.close()
-            
-            status = ExecutionStatus.SUCCESS if data else ExecutionStatus.EMPTY
-            
-            return ExecutionResult(
-                status=status,
-                sql=sql,
-                data=data,
-                row_count=len(data),
-                column_names=column_names,
-                execution_time_ms=execution_time
-            )
-            
-        except sqlite3.Error as e:
+        except Exception as e:
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,
                 sql=sql,
@@ -357,57 +421,112 @@ class GetSchemaContextTool(BaseTool):
     
     def _get_schema_context(self) -> SchemaContext:
         """Get structured schema context."""
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        
-        # Get all tables
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        table_names = [row[0] for row in cursor.fetchall() if not row[0].startswith('sqlite_')]
-        
+        db_type = get_db_type()
         tables = []
         relationships = []
         
-        for table_name in table_names:
-            # Get columns
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns_data = cursor.fetchall()
+        with get_connection_context() as conn:
+            cursor = conn.cursor()
             
-            columns = []
-            for col in columns_data:
-                columns.append(ColumnInfo(
-                    name=col[1],
-                    data_type=col[2],
-                    nullable=not col[3],
-                    primary_key=bool(col[5])
+            # Get all tables
+            if db_type == "sqlite":
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                table_names = [row[0] for row in cursor.fetchall() if not row[0].startswith('sqlite_')]
+            else:
+                cursor.execute("""
+                    SELECT table_name FROM information_schema.tables 
+                    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                    ORDER BY table_name
+                """)
+                table_names = [row[0] if isinstance(row, tuple) else row['table_name'] for row in cursor.fetchall()]
+            
+            for table_name in table_names:
+                # Get columns based on database type
+                if db_type == "sqlite":
+                    cursor.execute(f"PRAGMA table_info({table_name})")
+                    columns_data = cursor.fetchall()
+                    
+                    columns = []
+                    for col in columns_data:
+                        columns.append(ColumnInfo(
+                            name=col[1],
+                            data_type=col[2],
+                            nullable=not col[3],
+                            primary_key=bool(col[5])
+                        ))
+                    
+                    # Get foreign keys
+                    cursor.execute(f"PRAGMA foreign_key_list({table_name})")
+                    fk_data = cursor.fetchall()
+                    
+                    for fk in fk_data:
+                        relationships.append(ForeignKeyRelation(
+                            from_table=table_name,
+                            from_column=fk[3],
+                            to_table=fk[2],
+                            to_column=fk[4]
+                        ))
+                        for col in columns:
+                            if col.name == fk[3]:
+                                col.foreign_key = f"{fk[2]}.{fk[4]}"
+                else:
+                    # PostgreSQL
+                    cursor.execute("""
+                        SELECT c.column_name, c.data_type, c.is_nullable = 'YES',
+                               EXISTS(SELECT 1 FROM information_schema.table_constraints tc
+                                      JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+                                      WHERE tc.constraint_type = 'PRIMARY KEY' 
+                                        AND tc.table_name = %s AND kcu.column_name = c.column_name)
+                        FROM information_schema.columns c
+                        WHERE c.table_schema = 'public' AND c.table_name = %s
+                        ORDER BY c.ordinal_position
+                    """, (table_name, table_name))
+                    
+                    columns = []
+                    for row in cursor.fetchall():
+                        col_name = row[0] if isinstance(row, tuple) else row['column_name']
+                        col_type = row[1] if isinstance(row, tuple) else row['data_type']
+                        nullable = row[2] if isinstance(row, tuple) else row.get('is_nullable', True)
+                        is_pk = row[3] if isinstance(row, tuple) else row.get('exists', False)
+                        columns.append(ColumnInfo(
+                            name=col_name,
+                            data_type=col_type,
+                            nullable=nullable,
+                            primary_key=is_pk
+                        ))
+                    
+                    # Get foreign keys for PostgreSQL
+                    cursor.execute("""
+                        SELECT kcu.column_name, ccu.table_name, ccu.column_name
+                        FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+                        JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
+                        WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = %s
+                    """, (table_name,))
+                    
+                    for row in cursor.fetchall():
+                        from_col = row[0] if isinstance(row, tuple) else row['column_name']
+                        to_table = row[1] if isinstance(row, tuple) else row['table_name']
+                        to_col = row[2] if isinstance(row, tuple) else row.get('column_name')
+                        relationships.append(ForeignKeyRelation(
+                            from_table=table_name,
+                            from_column=from_col,
+                            to_table=to_table,
+                            to_column=to_col
+                        ))
+                        for col in columns:
+                            if col.name == from_col:
+                                col.foreign_key = f"{to_table}.{to_col}"
+                
+                # Get row count
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                row_count = cursor.fetchone()[0]
+                
+                tables.append(TableInfo(
+                    name=table_name,
+                    columns=columns,
+                    row_count=row_count
                 ))
-            
-            # Get foreign keys
-            cursor.execute(f"PRAGMA foreign_key_list({table_name})")
-            fk_data = cursor.fetchall()
-            
-            for fk in fk_data:
-                relationships.append(ForeignKeyRelation(
-                    from_table=table_name,
-                    from_column=fk[3],
-                    to_table=fk[2],
-                    to_column=fk[4]
-                ))
-                # Update column with FK info
-                for col in columns:
-                    if col.name == fk[3]:
-                        col.foreign_key = f"{fk[2]}.{fk[4]}"
-            
-            # Get row count
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-            row_count = cursor.fetchone()[0]
-            
-            tables.append(TableInfo(
-                name=table_name,
-                columns=columns,
-                row_count=row_count
-            ))
-        
-        conn.close()
         
         # Generate summary
         summary_lines = [
@@ -473,27 +592,34 @@ class DataSamplerTool(BaseTool):
              sample_size: int = 10) -> str:
         """Sample data from the specified table/column."""
         try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            cursor = conn.cursor()
+            db_type = get_db_type()
             
-            # Verify table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", 
-                          (table_name,))
-            if not cursor.fetchone():
-                conn.close()
-                return f"Error: Table '{table_name}' not found."
-            
-            result_lines = [f"=== Data Sample: {table_name} ===\n"]
-            
-            if column_name:
-                # Analyze specific column
-                result_lines.extend(self._analyze_column(cursor, table_name, column_name))
-            else:
-                # Get sample rows
-                result_lines.extend(self._sample_rows(cursor, table_name, sample_size))
-            
-            conn.close()
-            return "\n".join(result_lines)
+            with get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                # Verify table exists (database-agnostic)
+                if db_type == "sqlite":
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", 
+                                  (table_name,))
+                else:
+                    cursor.execute("""
+                        SELECT table_name FROM information_schema.tables 
+                        WHERE table_schema = 'public' AND table_name = %s
+                    """, (table_name,))
+                
+                if not cursor.fetchone():
+                    return f"Error: Table '{table_name}' not found."
+                
+                result_lines = [f"=== Data Sample: {table_name} ===\n"]
+                
+                if column_name:
+                    # Analyze specific column
+                    result_lines.extend(self._analyze_column(cursor, table_name, column_name, db_type))
+                else:
+                    # Get sample rows
+                    result_lines.extend(self._sample_rows(cursor, table_name, sample_size))
+                
+                return "\n".join(result_lines)
             
         except Exception as e:
             return f"Error sampling data: {str(e)}"
