@@ -203,7 +203,7 @@ export default function ReasoningCard({ action, index, totalSteps, simpleMode }:
         "from-emerald-400 to-emerald-500"
     ];
 
-    const colorIndex = Math.min(Math.floor(index / totalSteps * 5), 4);
+    const colorIndex = totalSteps > 0 ? Math.min(Math.floor(index / totalSteps * 5), 4) : 0;
     const gradientClass = gradientColors[colorIndex];
 
     return (
