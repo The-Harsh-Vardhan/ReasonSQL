@@ -47,6 +47,13 @@ const getApiBase = () => {
 
 const API_BASE = getApiBase();
 
+// Helper function to construct API URLs without double slashes
+const buildApiUrl = (path: string) => {
+  const base = API_BASE.replace(/\/+$/, ""); // Remove trailing slashes
+  const cleanPath = path.replace(/^\/+/, ""); // Remove leading slashes
+  return `${base}/${cleanPath}`;
+};
+
 // Demo Mode Queries
 const DEMO_QUERIES = [
   { category: "Simple", query: "How many customers are from Brazil?", description: "Tests COUNT with WHERE" },
@@ -77,7 +84,7 @@ export default function Home() {
     const startTime = Date.now();
 
     try {
-      const res = await fetch(`${API_BASE}/query`, {
+      const res = await fetch(buildApiUrl("query"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: query.trim() }),
