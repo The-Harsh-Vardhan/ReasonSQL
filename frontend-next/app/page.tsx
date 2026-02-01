@@ -25,12 +25,27 @@ interface QueryResponse {
   data_preview?: Record<string, unknown>[];
   row_count: number;
   is_meta_query: boolean;
-  reasoning_trace: ReasoningTrace;
+  reasoning_trace?: ReasoningTrace;
   warnings: string[];
   error?: string;
 }
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+// Use relative /api path on Vercel (proxied via rewrites), or direct URL for local dev
+const getApiBase = () => {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL;
+  if (envUrl) {
+    // Remove any trailing slashes from the environment variable
+    return envUrl.replace(/\/+$/, "");
+  }
+  // In production on Vercel, use the /api rewrite proxy
+  if (typeof window !== "undefined" && window.location.hostname !== "localhost") {
+    return "/api";
+  }
+  // Local development
+  return "http://localhost:8000";
+};
+
+const API_BASE = getApiBase();
 
 // Demo Mode Queries
 const DEMO_QUERIES = [
@@ -84,12 +99,20 @@ export default function Home() {
       }
 
       const data = await res.json();
-      setResponse(data);
+      // Normalize the response to ensure reasoning_trace exists
+      const normalizedData: QueryResponse = {
+        ...data,
+        reasoning_trace: data.reasoning_trace || { actions: [], final_status: "unknown", correction_attempts: 0 },
+        row_count: data.row_count ?? 0,
+        is_meta_query: data.is_meta_query ?? false,
+        warnings: data.warnings || [],
+      };
+      setResponse(normalizedData);
 
       setQueryHistory(prev => [...prev.slice(-4), {
         query: query.trim(),
-        success: data.success,
-        time: data.reasoning_trace?.total_time_ms || Date.now() - startTime
+        success: normalizedData.success,
+        time: normalizedData.reasoning_trace?.total_time_ms || Date.now() - startTime
       }]);
 
     } catch (err) {
@@ -325,7 +348,7 @@ export default function Home() {
                   </span>
                   <div className="flex gap-8 text-sm">
                     <div className="text-center">
-                      <div className="text-white font-semibold text-lg">{response.reasoning_trace.total_time_ms?.toFixed(0) || 0}ms</div>
+                      <div className="text-white font-semibold text-lg">{response.reasoning_trace?.total_time_ms?.toFixed(0) || 0}ms</div>
                       <div className="text-gray-500 text-xs">Time</div>
                     </div>
                     <div className="text-center">
@@ -333,11 +356,11 @@ export default function Home() {
                       <div className="text-gray-500 text-xs">Rows</div>
                     </div>
                     <div className="text-center">
-                      <div className="text-white font-semibold text-lg">{response.reasoning_trace.correction_attempts}</div>
+                      <div className="text-white font-semibold text-lg">{response.reasoning_trace?.correction_attempts ?? 0}</div>
                       <div className="text-gray-500 text-xs">Retries</div>
                     </div>
                     <div className="text-center">
-                      <div className="text-white font-semibold text-lg">{response.reasoning_trace.actions.length}</div>
+                      <div className="text-white font-semibold text-lg">{response.reasoning_trace?.actions?.length ?? 0}</div>
                       <div className="text-gray-500 text-xs">Steps</div>
                     </div>
                   </div>
@@ -362,7 +385,7 @@ export default function Home() {
                     : "text-gray-400 hover:text-gray-300 hover:bg-white/5"
                     }`}
                 >
-                  Reasoning ({response.reasoning_trace.actions.length} steps)
+                  Reasoning ({response.reasoning_trace?.actions?.length ?? 0} steps)
                 </button>
               </div>
 
@@ -421,12 +444,12 @@ export default function Home() {
                     {/* Header */}
                     <div className="flex items-center gap-3 mb-6 pb-4 border-b border-white/10">
                       <h3 className="text-xl font-semibold text-white">How I figured it out</h3>
-                      <span className="text-gray-500 text-sm">({response.reasoning_trace.actions.length} steps)</span>
+                      <span className="text-gray-500 text-sm">({response.reasoning_trace?.actions?.length ?? 0} steps)</span>
                     </div>
 
                     {/* Reasoning Steps */}
                     <div className="pl-4">
-                      {response.reasoning_trace.actions
+                      {(response.reasoning_trace?.actions || [])
                         .filter(a => !simpleMode || a.agent_name.includes("BATCH") || a.agent_name.includes("Safety") || a.agent_name.includes("Schema"))
                         .map((action, i, arr) => (
                           <ReasoningCard
