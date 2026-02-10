@@ -63,7 +63,7 @@ services:
       # Token Limits (Quota Protection)
       # ===========================================
       - key: MAX_LLM_TOKENS
-        value: "256"
+        value: "1024"
       - key: MAX_LLM_CALLS_PER_QUERY
         value: "5"
       

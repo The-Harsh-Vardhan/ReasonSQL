@@ -151,7 +151,7 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash")
 
 # Token & call limits (prevents quota exhaustion)
-MAX_LLM_TOKENS = int(os.getenv("MAX_LLM_TOKENS", "256"))
+MAX_LLM_TOKENS = int(os.getenv("MAX_LLM_TOKENS", "1024"))
 MAX_LLM_CALLS_PER_QUERY = int(os.getenv("MAX_LLM_CALLS_PER_QUERY", "5"))
 
 # Provider fallback chain configuration
