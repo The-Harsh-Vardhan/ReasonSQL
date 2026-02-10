@@ -191,6 +191,7 @@ def _get_postgres_connection():
             user=parsed.username,
             password=unquote(parsed.password) if parsed.password else None,
             dbname=parsed.path.lstrip('/') or 'postgres',
+            sslmode='require',
             cursor_factory=RealDictCursor
         )
     else:
