@@ -20,6 +20,18 @@ export const metadata: Metadata = {
   description: "Convert natural language to SQL with 12 specialized AI agents. Features schema exploration, safety validation, and self-correction.",
   keywords: ["NL2SQL", "natural language to SQL", "AI agents", "database", "Gemini", "LLM"],
   manifest: "/manifest.json",
+  metadataBase: new URL("https://reason-sql.vercel.app"),
+  openGraph: {
+    title: "ReasonSQL - Multi-Agent NL→SQL System",
+    description: "Convert natural language to SQL with 12 specialized AI agents. Quota-optimized, safety-validated, self-correcting.",
+    siteName: "ReasonSQL",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "ReasonSQL - Multi-Agent NL→SQL System",
+    description: "Natural Language → SQL with 12 AI Agents",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
