@@ -38,7 +38,7 @@ from enum import Enum
 import time
 
 from litellm import completion
-from configs import VERBOSE
+from configs import VERBOSE, MAX_LLM_TOKENS, ENABLE_QWEN_FALLBACK
 
 
 # ============================================================

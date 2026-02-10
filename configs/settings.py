@@ -150,6 +150,20 @@ DATABASE_TYPE = get_db_type()
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash-exp")
 
+# Token & call limits (prevents quota exhaustion)
+MAX_LLM_TOKENS = int(os.getenv("MAX_LLM_TOKENS", "256"))
+MAX_LLM_CALLS_PER_QUERY = int(os.getenv("MAX_LLM_CALLS_PER_QUERY", "5"))
+
+# Provider fallback chain configuration
+PRIMARY_PROVIDER = os.getenv("PRIMARY_PROVIDER", "gemini").lower()
+SECONDARY_PROVIDER = os.getenv("SECONDARY_PROVIDER", "groq").lower()
+TERTIARY_PROVIDER = os.getenv("TERTIARY_PROVIDER", "qwen").lower()
+ENABLE_QWEN_FALLBACK = os.getenv("ENABLE_QWEN_FALLBACK", "false").lower() == "true"
+
+# Groq safety settings (prevent accidental use of quota-hungry models)
+GROQ_ALLOWED_MODELS = os.getenv("GROQ_ALLOWED_MODELS", "groq/llama-3.1-8b-instant,groq/llama3-8b-8192").split(",")
+GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "groq/llama-3.1-8b-instant")
+
 # =============================================================================
 # SYSTEM SETTINGS
 # =============================================================================
