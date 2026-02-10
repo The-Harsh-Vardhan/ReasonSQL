@@ -156,3 +156,7 @@ class HealthResponse(BaseModel):
     version: str = "1.0.0"
     llm_provider: Optional[str] = None
     database_connected: bool = False
+    db_type: Optional[str] = None
+    db_name: Optional[str] = None
+    table_count: int = 0
+    tables: List[str] = []

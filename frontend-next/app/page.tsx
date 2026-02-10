@@ -3,6 +3,7 @@
 import { useState } from "react";
 import ProcessingDiagram from "./components/ProcessingDiagram";
 import ReasoningCard from "./components/ReasoningCard";
+import SystemStatus from "./components/SystemStatus";
 
 // API Types
 interface AgentAction {
@@ -224,6 +225,11 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        <hr className="border-white/10 my-4" />
+
+        {/* System Status */}
+        <SystemStatus />
 
         <hr className="border-white/10 my-4" />
 

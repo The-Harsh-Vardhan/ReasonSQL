@@ -187,11 +187,29 @@ def _convert_reasoning_trace(trace) -> ReasoningTraceAPI:
 async def health_check():
     """Check API health and configuration status."""
     default_db = _database_registry.get("default", {})
+    
+    # Get live database info
+    db_info = test_connection()
+    db_connected = db_info.get("connected", False)
+    db_type = db_info.get("db_type", "unknown")
+    table_count = db_info.get("table_count", 0)
+    tables = db_info.get("tables", [])
+    
+    # Build db_name based on type
+    if db_type == "postgresql":
+        db_name = "Supabase PostgreSQL"
+    else:
+        db_name = db_info.get("connection_info", "SQLite (local)")
+    
     return HealthResponse(
         status="healthy",
         version="1.0.0",
         llm_provider=LLM_PROVIDER,
-        database_connected=default_db.get("connected", False)
+        database_connected=db_connected,
+        db_type=db_type,
+        db_name=db_name,
+        table_count=table_count,
+        tables=tables,
     )
 
 
