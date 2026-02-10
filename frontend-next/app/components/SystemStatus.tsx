@@ -9,6 +9,7 @@ interface HealthData {
     database_connected: boolean;
     db_type: string | null;
     db_name: string | null;
+    dataset_name: string | null;
     table_count: number;
     tables: string[];
 }
@@ -62,10 +63,10 @@ export default function SystemStatus() {
     const StatusDot = ({ state }: { state: ConnectionState }) => (
         <span
             className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${state === "connected"
-                    ? "bg-emerald-400 status-dot-pulse"
-                    : state === "disconnected"
-                        ? "bg-red-400"
-                        : "bg-yellow-400 animate-pulse"
+                ? "bg-emerald-400 status-dot-pulse"
+                : state === "disconnected"
+                    ? "bg-red-400"
+                    : "bg-yellow-400 animate-pulse"
                 }`}
         />
     );
@@ -112,27 +113,36 @@ export default function SystemStatus() {
                 </div>
             </div>
 
-            {/* Database Info Card */}
+            {/* DB Info Card */}
             {health && health.database_connected && (
                 <div className="rounded-xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 p-3 space-y-2">
                     {/* DB Type Badge */}
-                    <div className="flex items-center gap-2">
-                        <span
-                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${health.db_type === "postgresql"
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${health.db_type === "postgresql"
                                     ? "bg-blue-500/20 text-blue-300 border border-blue-500/30"
                                     : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                                }`}
-                        >
-                            {health.db_type === "postgresql" ? "PostgreSQL" : "SQLite"}
-                        </span>
-                        <span className="text-gray-400 text-[10px]">{health.version}</span>
+                                    }`}
+                            >
+                                {health.db_type === "postgresql" ? "PostgreSQL" : "SQLite"}
+                            </span>
+                            <span className="text-gray-400 text-[10px]">{health.version}</span>
+                        </div>
+                        {health.dataset_name && (
+                            <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 uppercase tracking-tighter">
+                                {health.dataset_name}
+                            </span>
+                        )}
                     </div>
 
                     {/* DB Name */}
                     <div>
-                        <div className="text-[10px] text-gray-500 uppercase tracking-wider">Database</div>
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider">
+                            {health.dataset_name ? "Dataset Source" : "Database"}
+                        </div>
                         <div className="text-xs text-gray-300 truncate" title={health.db_name || ""}>
-                            {health.db_name || "Unknown"}
+                            {health.dataset_name || health.db_name || "Unknown"}
                         </div>
                     </div>
 

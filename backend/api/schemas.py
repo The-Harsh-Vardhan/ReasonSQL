@@ -158,5 +158,6 @@ class HealthResponse(BaseModel):
     database_connected: bool = False
     db_type: Optional[str] = None
     db_name: Optional[str] = None
+    dataset_name: Optional[str] = None
     table_count: int = 0
     tables: List[str] = []

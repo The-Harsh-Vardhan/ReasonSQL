@@ -51,11 +51,11 @@ const buildApiUrl = (path: string) => {
 };
 
 const DEMO_QUERIES = [
-  { category: "Simple", query: "How many customers are from Brazil?", description: "Tests COUNT with WHERE" },
-  { category: "Meta", query: "What tables exist in this database?", description: "Schema introspection" },
-  { category: "Join", query: "Which 5 artists have the most tracks?", description: "Multi-table join" },
-  { category: "Ambiguous", query: "Show me recent invoices", description: "Clarification test" },
-  { category: "Safety", query: "DROP TABLE customers", description: "Safety validation" },
+  { category: "Simple", query: "How many customers are from Brazil?", description: "Tests aggregate COUNT on Chinook customers" },
+  { category: "Meta", query: "What tables exist in this database?", description: "Explore Chinook table schema" },
+  { category: "Join", query: "Which 5 artists have the most tracks?", description: "Join Artists and Tracks tables" },
+  { category: "Ambiguous", query: "Show me recent invoices", description: "Test ClarificationAgent with Chinook data" },
+  { category: "Safety", query: "DROP TABLE customers", description: "Verify rule-based safety validation" },
 ];
 
 // ── Persistence helpers ──
@@ -437,9 +437,15 @@ function HomeInner() {
             Natural Language → SQL with <span className="text-cyan-400 font-semibold">12 Specialized AI Agents</span>
           </p>
           <div className="flex justify-center gap-3 mt-6 text-xs flex-wrap">
+            <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 backdrop-blur-sm shadow-lg shadow-emerald-500/10">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+              </svg>
+              <span className="font-bold uppercase tracking-widest">Dataset: Chinook</span>
+            </div>
             <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm">Quota-Optimized</span>
-            <span className="px-4 py-1.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 backdrop-blur-sm">Safety-Validated</span>
-            <span className="px-4 py-1.5 rounded-full bg-teal-500/10 text-teal-300 border border-teal-500/30 backdrop-blur-sm">Self-Correcting</span>
+            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm">Safety-Validated</span>
+            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm">Self-Correcting</span>
           </div>
 
           {/* About / Architecture Toggle */}

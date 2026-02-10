@@ -365,10 +365,21 @@ def test_connection() -> Dict[str, Any]:
         # Test with simple query
         tables = get_tables()
         
+        # Detect dataset
+        dataset_name = None
+        chinook_tables = {"Album", "Artist", "Customer", "Employee", "Genre", "Invoice", "InvoiceLine", "MediaType", "Playlist", "PlaylistTrack", "Track"}
+        # Both PascalCase and snake_case matches
+        chinook_tables_lower = {t.lower() for t in chinook_tables}
+        actual_tables_lower = {t.lower() for t in tables}
+        
+        if len(actual_tables_lower.intersection(chinook_tables_lower)) >= 5:
+            dataset_name = "Chinook"
+        
         return {
             "connected": True,
             "db_type": db_type,
             "connection_info": masked_url,
+            "dataset_name": dataset_name,
             "table_count": len(tables),
             "tables": tables[:5]  # First 5 tables
         }

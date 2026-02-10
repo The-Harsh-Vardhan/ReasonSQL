@@ -208,6 +208,7 @@ async def health_check():
         database_connected=db_connected,
         db_type=db_type,
         db_name=db_name,
+        dataset_name=db_info.get("dataset_name"),
         table_count=table_count,
         tables=tables,
     )
