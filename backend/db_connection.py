@@ -123,18 +123,28 @@ def _resolve_ipv4(hostname: str) -> str:
 
 
 def _inject_ipv4_into_url(database_url: str) -> str:
-    """Replace hostname with IPv4 address in DATABASE_URL to avoid IPv6 issues."""
+    """Replace hostname with IPv4 address in DATABASE_URL to avoid IPv6 issues.
+    
+    ONLY applies to direct Supabase connections (db.*.supabase.co).
+    Pooler connections (*.pooler.supabase.com) already resolve to IPv4
+    and MUST keep the original hostname for TLS SNI routing.
+    """
     from urllib.parse import urlparse, urlunparse
     try:
         parsed = urlparse(database_url)
-        if parsed.hostname and not parsed.hostname.replace('.', '').isdigit():
-            ipv4 = _resolve_ipv4(parsed.hostname)
-            if ipv4 != parsed.hostname:
+        hostname = parsed.hostname
+        
+        # Skip pooler URLs — they need the hostname for SNI-based tenant routing
+        if hostname and "pooler.supabase.com" in hostname:
+            print(f"[DB] Pooler URL detected ({hostname}), keeping original hostname for SNI")
+            return database_url
+        
+        if hostname and not hostname.replace('.', '').isdigit():
+            ipv4 = _resolve_ipv4(hostname)
+            if ipv4 != hostname:
                 # Replace hostname with IP, preserve port
-                new_netloc = parsed.netloc.replace(parsed.hostname, ipv4)
+                new_netloc = parsed.netloc.replace(hostname, ipv4)
                 new_url = urlunparse(parsed._replace(netloc=new_netloc))
-                # psycopg2 needs the original hostname for SSL SNI in some cases,
-                # but for Supabase direct connections this works fine
                 return new_url
     except Exception as e:
         print(f"[DB] IPv4 resolution failed, using original URL: {e}")
