@@ -107,6 +107,40 @@ def _get_sqlite_connection() -> sqlite3.Connection:
     return conn
 
 
+def _resolve_ipv4(hostname: str) -> str:
+    """Resolve hostname to IPv4 address (Render can't reach some IPv6 addresses)."""
+    import socket
+    try:
+        # Force AF_INET (IPv4) resolution
+        results = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        if results:
+            ipv4 = results[0][4][0]
+            print(f"[DB] Resolved {hostname} → {ipv4} (IPv4)")
+            return ipv4
+    except socket.gaierror:
+        pass
+    return hostname  # Fallback to original
+
+
+def _inject_ipv4_into_url(database_url: str) -> str:
+    """Replace hostname with IPv4 address in DATABASE_URL to avoid IPv6 issues."""
+    from urllib.parse import urlparse, urlunparse
+    try:
+        parsed = urlparse(database_url)
+        if parsed.hostname and not parsed.hostname.replace('.', '').isdigit():
+            ipv4 = _resolve_ipv4(parsed.hostname)
+            if ipv4 != parsed.hostname:
+                # Replace hostname with IP, preserve port
+                new_netloc = parsed.netloc.replace(parsed.hostname, ipv4)
+                new_url = urlunparse(parsed._replace(netloc=new_netloc))
+                # psycopg2 needs the original hostname for SSL SNI in some cases,
+                # but for Supabase direct connections this works fine
+                return new_url
+    except Exception as e:
+        print(f"[DB] IPv4 resolution failed, using original URL: {e}")
+    return database_url
+
+
 def _get_postgres_connection():
     """Get or create PostgreSQL connection."""
     global _pg_connection
@@ -131,9 +165,12 @@ def _get_postgres_connection():
                 pass
             _pg_connection = None
     
+    # Force IPv4 to avoid "Network is unreachable" on IPv6-only resolution
+    resolved_url = _inject_ipv4_into_url(database_url)
+    
     # Create new connection
     _pg_connection = psycopg2.connect(
-        database_url,
+        resolved_url,
         cursor_factory=RealDictCursor
     )
     _pg_connection.autocommit = True  # For read-only operations
