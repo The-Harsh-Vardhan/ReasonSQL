@@ -88,8 +88,9 @@ We welcome feature ideas! Please:
 1. **Create a feature branch**: `git checkout -b feat/my-feature`
 2. **Make your changes** with clear commits
 3. **Update documentation** if needed
-4. **Run the demo** to verify nothing is broken
-5. **Submit PR** with a clear description
+4. **Run tests and demos** to verify nothing is broken
+5. **Test deployment locally** if you changed deployment files
+6. **Submit PR** with a clear description
 
 ### PR Checklist
 
@@ -97,6 +98,46 @@ We welcome feature ideas! Please:
 - [ ] New features include documentation
 - [ ] Safety constraints are preserved
 - [ ] Demo runs successfully
+- [ ] Docker build works (if deployment files changed)
+- [ ] Streamlit app runs without errors
+
+## 🧪 Testing
+
+### Running Tests
+
+```bash
+# Run demo mode
+python cli.py --demo
+
+# Test specific query
+python cli.py -q "How many customers are from Brazil?"
+
+# Test Streamlit app
+streamlit run ui/streamlit_app.py
+```
+
+### Testing Deployment
+
+#### Docker Testing
+```bash
+# Build Docker image
+docker build -t nl2sql-test .
+
+# Run container
+docker run -p 8501:8501 \
+  -e GROQ_API_KEY=your_key \
+  nl2sql-test
+
+# Test with docker-compose
+docker-compose up
+```
+
+#### Streamlit Cloud Testing
+Before pushing:
+1. Verify `.streamlit/config.toml` is correct
+2. Check `requirements.txt` includes all dependencies
+3. Ensure `packages.txt` has system dependencies
+4. Test secrets handling with `.streamlit/secrets.toml.example`
 
 ## 🏆 Recognition
 

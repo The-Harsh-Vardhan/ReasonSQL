@@ -1,0 +1,125 @@
+# Deployment Health Check Workflow
+# Runs on schedule and on-demand to verify Render and Vercel deployments
+
+name: 🚀 Deployment Check
+
+on:
+  schedule:
+    # Run every 6 hours to keep Render from sleeping
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - render
+          - vercel
+
+env:
+  RENDER_API_URL: https://reasonsql-api.onrender.com
+  VERCEL_FRONTEND_URL: https://reason-sql.vercel.app
+
+jobs:
+  check-render-backend:
+    name: 🟢 Check Render Backend
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.environment == 'all' || github.event.inputs.environment == 'render' || github.event_name == 'schedule' }}
+    
+    steps:
+      - name: 🏥 Health Check
+        id: health
+        run: |
+          echo "Checking Render backend health..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" ${{ env.RENDER_API_URL }}/health --max-time 60)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+          
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Render backend is healthy!"
+            echo "status=healthy" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Render backend is unhealthy!"
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: 📊 Parse Health Response
+        if: steps.health.outputs.status == 'healthy'
+        run: |
+          HEALTH=$(curl -s ${{ env.RENDER_API_URL }}/health)
+          echo "### 🟢 Render Backend Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | $(echo $HEALTH | jq -r '.status') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | $(echo $HEALTH | jq -r '.version') |" >> $GITHUB_STEP_SUMMARY
+          echo "| LLM Provider | $(echo $HEALTH | jq -r '.llm_provider') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Database Connected | $(echo $HEALTH | jq -r '.database_connected') |" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📝 Check API Docs
+        run: |
+          echo "Checking Swagger docs availability..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.RENDER_API_URL }}/docs)
+          
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ API docs available at ${{ env.RENDER_API_URL }}/docs"
+          else
+            echo "⚠️ API docs returned HTTP $HTTP_CODE"
+          fi
+
+  check-vercel-frontend:
+    name: 🔷 Check Vercel Frontend
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.environment == 'all' || github.event.inputs.environment == 'vercel' || github.event_name == 'schedule' }}
+    
+    steps:
+      - name: 🌐 Frontend Check
+        id: frontend
+        run: |
+          echo "Checking Vercel frontend..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.VERCEL_FRONTEND_URL }} --max-time 30)
+          
+          echo "HTTP Status: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Vercel frontend is live!"
+            echo "status=live" >> $GITHUB_OUTPUT
+            echo "### 🔷 Vercel Frontend Status" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Live** at ${{ env.VERCEL_FRONTEND_URL }}" >> $GITHUB_STEP_SUMMARY
+          elif [ "$HTTP_CODE" -eq 404 ]; then
+            echo "⚠️ Frontend not deployed yet (404)"
+            echo "status=not_deployed" >> $GITHUB_OUTPUT
+            echo "### 🔷 Vercel Frontend Status" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Not Deployed** - 404 at ${{ env.VERCEL_FRONTEND_URL }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Frontend returned unexpected status: $HTTP_CODE"
+            echo "status=error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  summary:
+    name: 📋 Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [check-render-backend, check-vercel-frontend]
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Summary
+        run: |
+          echo "## 🚀 ReasonSQL Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | URL | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Render Backend | ${{ env.RENDER_API_URL }} | ${{ needs.check-render-backend.result == 'success' && '✅ Healthy' || '❌ Unhealthy' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Vercel Frontend | ${{ env.VERCEL_FRONTEND_URL }} | ${{ needs.check-vercel-frontend.result == 'success' && '✅ Live' || '⚠️ Check Required' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Last checked: $(date -u '+%Y-%m-%d %H:%M:%S UTC')_" >> $GITHUB_STEP_SUMMARY

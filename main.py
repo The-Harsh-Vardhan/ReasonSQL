@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Main entry point for NL2SQL Multi-Agent System.
+Main entry point for ReasonSQL Multi-Agent System.
 """
 from cli import main
 
