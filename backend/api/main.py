@@ -195,6 +195,65 @@ async def health_check():
     )
 
 
+@app.get("/debug-db", tags=["System"])
+async def debug_db():
+    """Live database connection test (not cached)."""
+    import time
+    from urllib.parse import urlparse
+    
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        return {"error": "DATABASE_URL not set"}
+    
+    parsed = urlparse(database_url)
+    masked_pw = (parsed.password or "")[:3] + "***" if parsed.password else "NONE"
+    info = {
+        "user": parsed.username,
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "password_preview": masked_pw,
+        "password_length": len(parsed.password) if parsed.password else 0,
+        "dbname": parsed.path.lstrip('/'),
+        "is_pooler": "pooler.supabase.com" in (parsed.hostname or ""),
+        "url_has_sslmode": "sslmode" in database_url,
+    }
+    
+    # Try connection
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        from urllib.parse import unquote
+        
+        info["psycopg2_version"] = psycopg2.__version__
+        info["libpq_version"] = psycopg2.__libpq_version__
+        
+        t0 = time.time()
+        conn = psycopg2.connect(
+            host=parsed.hostname,
+            port=parsed.port or 6543,
+            user=parsed.username,
+            password=unquote(parsed.password) if parsed.password else None,
+            dbname=parsed.path.lstrip('/') or 'postgres',
+            sslmode='require',
+            connect_timeout=10,
+        )
+        elapsed = round(time.time() - t0, 2)
+        cur = conn.cursor()
+        cur.execute("SELECT current_database(), current_user, version()")
+        row = cur.fetchone()
+        conn.close()
+        info["connected"] = True
+        info["elapsed_s"] = elapsed
+        info["db_name"] = row[0]
+        info["db_user"] = row[1]
+        info["db_version"] = row[2][:60]
+    except Exception as e:
+        info["connected"] = False
+        info["error"] = str(e)
+    
+    return info
+
+
 @app.post("/query", response_model=QueryResponse, tags=["Query"])
 async def execute_query(request: QueryRequest):
     """
