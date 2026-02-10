@@ -288,11 +288,17 @@ async def execute_query(request: QueryRequest):
             detail=f"Database '{request.database_id}' not registered"
         )
     
+    # If registry says disconnected, do a live re-check (startup may have failed)
     if not db_info.get("connected"):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database '{request.database_id}' is not connected"
-        )
+        live_status = test_connection()
+        if live_status.get("connected"):
+            # Update registry so future requests skip re-check
+            db_info["connected"] = True
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Database '{request.database_id}' is not connected"
+            )
     
     try:
         # Create orchestrator and run query
