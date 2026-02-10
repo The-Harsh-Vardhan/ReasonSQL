@@ -99,7 +99,7 @@ export default function Home() {
           error: `HTTP ${res.status}: ${errorData.detail || res.statusText}`,
           row_count: 0,
           is_meta_query: false,
-          reasoning_trace: { actions: [], final_status: "error", correction_attempts: 0 },
+          reasoning_trace: { actions: [], final_status: "error", total_time_ms: 0, correction_attempts: 0 },
           warnings: res.status === 503 ? ["Backend database is not connected. Please check server configuration."] : [],
         });
         return;
@@ -109,7 +109,13 @@ export default function Home() {
       // Normalize the response to ensure reasoning_trace exists
       const normalizedData: QueryResponse = {
         ...data,
-        reasoning_trace: data.reasoning_trace || { actions: [], final_status: "unknown", correction_attempts: 0 },
+        reasoning_trace: {
+          actions: [],
+          final_status: "unknown",
+          total_time_ms: 0,
+          correction_attempts: 0,
+          ...(data.reasoning_trace || {}),
+        },
         row_count: data.row_count ?? 0,
         is_meta_query: data.is_meta_query ?? false,
         warnings: data.warnings || [],
@@ -125,11 +131,11 @@ export default function Home() {
     } catch (err) {
       setResponse({
         success: false,
-        answer: "Failed to connect to API. Is FastAPI running on port 8000?",
+        answer: "Failed to connect to the backend API. The server may be starting up (Render free tier can take ~30s). Please try again in a moment.",
         error: String(err),
         row_count: 0,
         is_meta_query: false,
-        reasoning_trace: { actions: [], final_status: "error", correction_attempts: 0 },
+        reasoning_trace: { actions: [], final_status: "error", total_time_ms: 0, correction_attempts: 0 },
         warnings: [],
       });
     } finally {
@@ -355,7 +361,7 @@ export default function Home() {
                   </span>
                   <div className="flex gap-8 text-sm">
                     <div className="text-center">
-                      <div className="text-white font-semibold text-lg">{response.reasoning_trace?.total_time_ms?.toFixed(0) || 0}ms</div>
+                      <div className="text-white font-semibold text-lg">{(response.reasoning_trace?.total_time_ms ?? 0).toFixed(0)}ms</div>
                       <div className="text-gray-500 text-xs">Time</div>
                     </div>
                     <div className="text-center">
