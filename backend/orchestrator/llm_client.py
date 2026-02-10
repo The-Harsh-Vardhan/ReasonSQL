@@ -154,12 +154,20 @@ class GeminiClient(LLMClient):
             raise ValueError("No Gemini API keys configured")
         
         self.current_key_index = 0
-        self.exhausted_keys = set()
+        self.exhausted_keys = {}  # key_index -> timestamp when exhausted
+        self.key_cooldown_seconds = 60  # Reset exhausted keys after 60s
         self._log(f"Loaded {len(self.api_keys)} Gemini API key(s)")
     
     def generate(self, prompt: str, metadata: Dict[str, Any] = None) -> LLMResponse:
         """Generate response from Gemini with automatic key rotation."""
         import os
+        
+        # Auto-reset keys that have cooled down
+        now = time.time()
+        cooled_keys = [k for k, t in self.exhausted_keys.items() if now - t > self.key_cooldown_seconds]
+        for k in cooled_keys:
+            self._log(f"🔄 Gemini key #{k+1} cooldown expired, marking as available")
+            del self.exhausted_keys[k]
         
         # Try all available keys
         attempts = 0
@@ -206,13 +214,13 @@ class GeminiClient(LLMClient):
                 if "429" in error_str or "rate limit" in error_str or "quota" in error_str or "403" in error_str or "forbidden" in error_str:
                     if "quota" in error_str or "exceeded your current quota" in error_str or "403" in error_str:
                         self._log(f"✗ Gemini key #{key_num} quota exhausted, rotating...")
-                        self.exhausted_keys.add(self.current_key_index)
+                        self.exhausted_keys[self.current_key_index] = time.time()
                         self._rotate_key()
                         attempts += 1
                         continue
                     else:
                         self._log(f"✗ Gemini key #{key_num} rate limit hit, rotating...")
-                        self.exhausted_keys.add(self.current_key_index)
+                        self.exhausted_keys[self.current_key_index] = time.time()
                         self._rotate_key()
                         attempts += 1
                         continue
@@ -474,6 +482,20 @@ class MultiProviderLLM:
         metadata = metadata or {}
         self.stats["total_calls"] += 1
         
+        # Auto-reset provider exhaustion after cooldown (60s)
+        # This prevents permanently skipping Gemini after a transient quota hit
+        if hasattr(self, '_exhaustion_timestamps'):
+            now = time.time()
+            for provider, ts in list(self._exhaustion_timestamps.items()):
+                if now - ts > 60 and self.provider_exhausted.get(provider, False):
+                    self._log(f"🔄 {provider.upper()} cooldown expired, re-enabling")
+                    self.provider_exhausted[provider] = False
+                    # Also reset GeminiClient's exhausted keys
+                    if provider == "gemini" and hasattr(self.gemini, 'exhausted_keys'):
+                        self.gemini.exhausted_keys.clear()
+        else:
+            self._exhaustion_timestamps = {}
+        
         # Skip known-exhausted primary provider
         if self.provider_exhausted[self.primary_name]:
             self._log(f"⚠️ {self.primary_name.upper()} quota exhausted (known), skipping to secondary")
@@ -491,8 +513,11 @@ class MultiProviderLLM:
             return response
         
         except (RateLimitError, QuotaExceededError) as e:
-            # Mark primary as exhausted
+            # Mark primary as exhausted with timestamp for auto-reset
             self.provider_exhausted[self.primary_name] = True
+            if not hasattr(self, '_exhaustion_timestamps'):
+                self._exhaustion_timestamps = {}
+            self._exhaustion_timestamps[self.primary_name] = time.time()
             
             reason = str(e)
             self._log(f"⚠️ PRIMARY provider failed: {reason}")
@@ -544,8 +569,11 @@ class MultiProviderLLM:
             return response
         
         except (RateLimitError, QuotaExceededError) as e:
-            # Mark secondary as exhausted
+            # Mark secondary as exhausted with timestamp for auto-reset
             self.provider_exhausted[self.secondary_name] = True
+            if not hasattr(self, '_exhaustion_timestamps'):
+                self._exhaustion_timestamps = {}
+            self._exhaustion_timestamps[self.secondary_name] = time.time()
             secondary_reason = str(e)
             
             self._log(f"⚠️ SECONDARY provider also failed: {e}")
