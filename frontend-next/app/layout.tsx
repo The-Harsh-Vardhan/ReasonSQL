@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import GlobalErrorBoundary from "./components/GlobalErrorBoundary";
+import { ToastProvider } from "./components/Toast";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -18,6 +19,12 @@ export const metadata: Metadata = {
   title: "ReasonSQL - Multi-Agent NL→SQL System",
   description: "Convert natural language to SQL with 12 specialized AI agents. Features schema exploration, safety validation, and self-correction.",
   keywords: ["NL2SQL", "natural language to SQL", "AI agents", "database", "Gemini", "LLM"],
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "ReasonSQL",
+  },
 };
 
 export default function RootLayout({
@@ -27,15 +34,19 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <link rel="apple-touch-icon" href="/icon-192.png" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <GlobalErrorBoundary>
-          {children}
+          <ToastProvider>
+            {children}
+          </ToastProvider>
         </GlobalErrorBoundary>
         <Analytics />
       </body>
     </html>
   );
 }
-
