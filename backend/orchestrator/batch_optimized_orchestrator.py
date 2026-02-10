@@ -278,6 +278,25 @@ class BatchOptimizedOrchestrator:
             print(f"[Orchestrator] 🔑 Multi-key rotation active: {key_count} keys found. Limit increased to {total_limit} RPM.")
             
         self.rate_limiter = RateLimiter(max_requests=total_limit, window_seconds=60)
+        
+        # Initialize schema graph for FK validation (graceful if unavailable)
+        try:
+            from backend.tools.schema_graph import SchemaGraph
+            db_type = get_db_type()
+            if db_type == "sqlite":
+                self.schema_graph = SchemaGraph.from_database(DATABASE_PATH)
+                if self.verbose:
+                    print(f"[Orchestrator] Schema graph loaded: {len(self.schema_graph.all_tables)} tables, {len(self.schema_graph.edges)} FK edges")
+            else:
+                # PostgreSQL: SchemaGraph doesn't support it yet, use empty graph
+                self.schema_graph = SchemaGraph()
+                if self.verbose:
+                    print(f"[Orchestrator] PostgreSQL detected — FK validation skipped (SchemaGraph supports SQLite only)")
+        except Exception as e:
+            from backend.tools.schema_graph import SchemaGraph
+            self.schema_graph = SchemaGraph()
+            if self.verbose:
+                print(f"[Orchestrator] Warning: Could not load schema graph: {e}")
     
     def _log(self, message: str):
         if self.verbose:
