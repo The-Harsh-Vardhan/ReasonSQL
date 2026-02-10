@@ -157,10 +157,16 @@ def _get_postgres_connection():
     
     _import_psycopg2()
     from psycopg2.extras import RealDictCursor
+    from urllib.parse import urlparse, unquote
     
     database_url = get_database_url()
     if not database_url:
         raise ValueError("DATABASE_URL environment variable not set")
+    
+    # Debug: log what we received (mask password)
+    parsed = urlparse(database_url)
+    masked_pw = (parsed.password or "")[:3] + "***" if parsed.password else "NONE"
+    print(f"[DB] Connecting: user={parsed.username}, host={parsed.hostname}, port={parsed.port}, password={masked_pw}")
     
     # Check if existing connection is still valid
     if _pg_connection is not None:
@@ -175,14 +181,26 @@ def _get_postgres_connection():
                 pass
             _pg_connection = None
     
-    # Force IPv4 to avoid "Network is unreachable" on IPv6-only resolution
-    resolved_url = _inject_ipv4_into_url(database_url)
+    # For pooler URLs, connect using individual parameters to preserve hostname for SNI
+    # and avoid any URL encoding/shell expansion issues with passwords
+    if parsed.hostname and "pooler.supabase.com" in parsed.hostname:
+        print(f"[DB] Using pooler connection (SNI hostname: {parsed.hostname})")
+        _pg_connection = psycopg2.connect(
+            host=parsed.hostname,
+            port=parsed.port or 6543,
+            user=parsed.username,
+            password=unquote(parsed.password) if parsed.password else None,
+            dbname=parsed.path.lstrip('/') or 'postgres',
+            cursor_factory=RealDictCursor
+        )
+    else:
+        # For direct connections, apply IPv4 resolution
+        resolved_url = _inject_ipv4_into_url(database_url)
+        _pg_connection = psycopg2.connect(
+            resolved_url,
+            cursor_factory=RealDictCursor
+        )
     
-    # Create new connection
-    _pg_connection = psycopg2.connect(
-        resolved_url,
-        cursor_factory=RealDictCursor
-    )
     _pg_connection.autocommit = True  # For read-only operations
     return _pg_connection
 
