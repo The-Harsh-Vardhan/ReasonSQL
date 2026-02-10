@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 from crewai import LLM
 
 # Load environment variables from .env file
-load_dotenv()
+# interpolate=False prevents $VAR expansion in values (important for passwords with $ characters)
+load_dotenv(interpolate=False)
 
 
 # =============================================================================
