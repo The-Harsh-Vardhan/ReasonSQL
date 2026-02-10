@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import ProcessingDiagram from "./components/ProcessingDiagram";
 import ReasoningCard from "./components/ReasoningCard";
 import SystemStatus from "./components/SystemStatus";
+import SchemaExplorer from "./components/SchemaExplorer";
+import QuerySuggestions from "./components/QuerySuggestions";
 
 // API Types
 interface AgentAction {
@@ -35,23 +37,19 @@ interface QueryResponse {
 const getApiBase = () => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
   if (envUrl) {
-    // Remove any trailing slashes from the environment variable
     return envUrl.replace(/\/+$/, "");
   }
-  // In production on Vercel, use the /api rewrite proxy
   if (typeof window !== "undefined" && window.location.hostname !== "localhost") {
     return "/api";
   }
-  // Local development
   return "http://localhost:8000";
 };
 
 const API_BASE = getApiBase();
 
-// Helper function to construct API URLs without double slashes
 const buildApiUrl = (path: string) => {
-  const base = API_BASE.replace(/\/+$/, ""); // Remove trailing slashes
-  const cleanPath = path.replace(/^\/+/, ""); // Remove leading slashes
+  const base = API_BASE.replace(/\/+$/, "");
+  const cleanPath = path.replace(/^\/+/, "");
   return `${base}/${cleanPath}`;
 };
 
@@ -64,6 +62,66 @@ const DEMO_QUERIES = [
   { category: "Safety", query: "DROP TABLE customers", description: "Safety validation" },
 ];
 
+// History localStorage key
+const HISTORY_KEY = "reasonsql_history";
+
+interface HistoryEntry {
+  query: string;
+  success: boolean;
+  time: number;
+  timestamp: number;
+}
+
+function loadHistory(): HistoryEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = localStorage.getItem(HISTORY_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(history: HistoryEntry[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-20)));
+  } catch { /* ignore */ }
+}
+
+// CSV export helper
+function downloadCSV(data: Record<string, unknown>[], filename = "results.csv") {
+  if (!data || data.length === 0) return;
+  const headers = Object.keys(data[0]);
+  const csvContent = [
+    headers.join(","),
+    ...data.map((row) =>
+      headers.map((h) => {
+        const val = String(row[h] ?? "");
+        return val.includes(",") || val.includes('"') || val.includes("\n") ? `"${val.replace(/"/g, '""')}"` : val;
+      }).join(",")
+    ),
+  ].join("\n");
+
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+// Copy helper with visual feedback
+function useCopyFeedback() {
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = useCallback(async (text: string, id: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 2000);
+  }, []);
+  return { copied, copy };
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -73,10 +131,18 @@ export default function Home() {
   const [demoMode, setDemoMode] = useState(true);
   const [demoIndex, setDemoIndex] = useState(0);
   const [simpleMode, setSimpleMode] = useState(false);
-  const [queryHistory, setQueryHistory] = useState<{ query: string; success: boolean; time: number }[]>([]);
+  const [queryHistory, setQueryHistory] = useState<HistoryEntry[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const { copied, copy } = useCopyFeedback();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Load history from localStorage on mount
+  useEffect(() => {
+    setQueryHistory(loadHistory());
+  }, []);
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!query.trim()) return;
 
     setLoading(true);
@@ -91,7 +157,6 @@ export default function Home() {
         body: JSON.stringify({ query: query.trim() }),
       });
 
-      // Handle HTTP errors gracefully
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({ detail: res.statusText }));
         setResponse({
@@ -107,7 +172,6 @@ export default function Home() {
       }
 
       const data = await res.json();
-      // Normalize the response to ensure reasoning_trace exists
       const normalizedData: QueryResponse = {
         ...data,
         reasoning_trace: {
@@ -123,11 +187,17 @@ export default function Home() {
       };
       setResponse(normalizedData);
 
-      setQueryHistory(prev => [...prev.slice(-4), {
+      const newEntry: HistoryEntry = {
         query: query.trim(),
         success: normalizedData.success,
-        time: normalizedData.reasoning_trace?.total_time_ms || Date.now() - startTime
-      }]);
+        time: normalizedData.reasoning_trace?.total_time_ms || Date.now() - startTime,
+        timestamp: Date.now(),
+      };
+      setQueryHistory((prev) => {
+        const updated = [...prev, newEntry].slice(-20);
+        saveHistory(updated);
+        return updated;
+      });
 
     } catch (err) {
       setResponse({
@@ -144,6 +214,19 @@ export default function Home() {
     }
   };
 
+  // Ctrl+Enter keyboard shortcut
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        handleSubmit();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, loading]);
+
   const runDemoQuery = (index: number) => {
     setDemoIndex(index);
     setQuery(DEMO_QUERIES[index].query);
@@ -155,10 +238,63 @@ export default function Home() {
     }
   };
 
+  // Copy button component
+  const CopyButton = ({ text, id, label = "Copy" }: { text: string; id: string; label?: string }) => (
+    <button
+      onClick={() => copy(text, id)}
+      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-white/10"
+      title={label}
+    >
+      {copied === id ? (
+        <>
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          <span className="text-emerald-400">Copied</span>
+        </>
+      ) : (
+        <>
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          <span>{label}</span>
+        </>
+      )}
+    </button>
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-emerald-950 flex bg-orbs bg-grid-pattern">
+      {/* Mobile Hamburger */}
+      <button
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        className="fixed top-4 left-4 z-50 lg:hidden p-2 rounded-xl glass-card text-white hover:bg-white/10 transition-colors"
+        aria-label="Toggle sidebar"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          {sidebarOpen ? (
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          ) : (
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+          )}
+        </svg>
+      </button>
+
+      {/* Sidebar Overlay on mobile */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-72 glass-card border-r border-white/10 p-6 flex flex-col">
+      <aside className={`
+        w-72 glass-card border-r border-white/10 p-6 flex flex-col z-40
+        fixed lg:relative inset-y-0 left-0 transform transition-transform duration-300 ease-in-out
+        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+        lg:translate-x-0 overflow-y-auto
+      `}>
         <h2 className="text-lg font-semibold text-white mb-6">Settings</h2>
 
         {/* Demo Mode */}
@@ -233,6 +369,11 @@ export default function Home() {
 
         <hr className="border-white/10 my-4" />
 
+        {/* Schema Explorer */}
+        <SchemaExplorer />
+
+        <hr className="border-white/10 my-4" />
+
         {/* Quick Facts */}
         <div className="mb-6">
           <h3 className="text-gray-400 text-sm mb-3 uppercase tracking-wider">Quick Facts</h3>
@@ -251,16 +392,28 @@ export default function Home() {
         {/* History */}
         {queryHistory.length > 0 && (
           <div className="mt-auto">
-            <h3 className="text-gray-400 text-sm mb-3 uppercase tracking-wider">Recent</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-gray-400 text-sm uppercase tracking-wider">Recent</h3>
+              <button
+                onClick={() => { setQueryHistory([]); saveHistory([]); }}
+                className="text-[10px] text-gray-600 hover:text-red-400 transition-colors"
+              >
+                Clear
+              </button>
+            </div>
             <div className="space-y-2">
-              {queryHistory.slice(-3).reverse().map((h, i) => (
-                <div key={i} className="text-xs bg-white/5 rounded-lg p-3 border border-white/5">
+              {queryHistory.slice(-5).reverse().map((h, i) => (
+                <button
+                  key={i}
+                  onClick={() => setQuery(h.query)}
+                  className="w-full text-left text-xs bg-white/5 rounded-lg p-3 border border-white/5 hover:bg-white/8 hover:border-white/10 transition-all"
+                >
                   <div className="flex items-center gap-2">
                     <span>{h.success ? "✅" : "❌"}</span>
-                    <span className="text-gray-400 truncate flex-1">{h.query.slice(0, 20)}...</span>
+                    <span className="text-gray-400 truncate flex-1">{h.query.slice(0, 25)}...</span>
                   </div>
                   <div className="text-gray-500 mt-1">{h.time.toFixed(0)}ms</div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -268,15 +421,15 @@ export default function Home() {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Hero Header */}
-        <header className="text-center py-16 px-4">
-          <h1 className="text-6xl font-extrabold text-white mb-4 tracking-tight">
+        <header className="text-center py-12 lg:py-16 px-4">
+          <h1 className="text-4xl lg:text-6xl font-extrabold text-white mb-4 tracking-tight">
             <span className="bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 bg-clip-text text-transparent glow-text">
               ReasonSQL
             </span>
           </h1>
-          <p className="text-xl text-gray-300 max-w-2xl mx-auto font-light">
+          <p className="text-lg lg:text-xl text-gray-300 max-w-2xl mx-auto font-light">
             Natural Language → SQL with <span className="text-cyan-400 font-semibold">12 Specialized AI Agents</span>
           </p>
           <div className="flex justify-center gap-3 mt-6 text-xs flex-wrap">
@@ -294,7 +447,7 @@ export default function Home() {
 
         {/* Demo Banner */}
         {demoMode && (
-          <div className="mx-8 mb-4 p-4 rounded-xl bg-gradient-to-r from-cyan-500/10 to-emerald-500/10 border border-cyan-500/20 backdrop-blur-sm">
+          <div className="mx-4 lg:mx-8 mb-4 p-4 rounded-xl bg-gradient-to-r from-cyan-500/10 to-emerald-500/10 border border-cyan-500/20 backdrop-blur-sm">
             <div className="flex items-center justify-between">
               <div>
                 <span className="text-cyan-300 font-medium">
@@ -315,15 +468,16 @@ export default function Home() {
         )}
 
         {/* Main Content Area */}
-        <main className="flex-1 px-8 pb-8">
+        <main className="flex-1 px-4 lg:px-8 pb-8">
           {/* Query Input */}
-          <form onSubmit={handleSubmit} className="mb-8">
+          <form onSubmit={handleSubmit} className="mb-4">
             <div className="flex gap-3">
               <input
+                ref={inputRef}
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Ask anything about your database..."
+                placeholder="Ask anything about your database... (Ctrl+Enter to submit)"
                 className="flex-1 px-6 py-4 rounded-xl glass-card text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 text-lg input-glow transition-all"
                 disabled={loading}
               />
@@ -342,6 +496,13 @@ export default function Home() {
               </button>
             </div>
           </form>
+
+          {/* Query Suggestions */}
+          {!loading && !response && (
+            <div className="mb-8">
+              <QuerySuggestions onSelect={(q) => { setQuery(q); inputRef.current?.focus(); }} />
+            </div>
+          )}
 
           {/* Loading - Processing Diagram */}
           {loading && (
@@ -412,25 +573,45 @@ export default function Home() {
               <div className="p-6">
                 {activeTab === "result" && (
                   <div className="space-y-6">
+                    {/* Answer */}
                     <div>
-                      <h3 className="text-lg font-semibold text-white mb-3">Answer</h3>
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-lg font-semibold text-white">Answer</h3>
+                        <CopyButton text={response.answer} id="answer" label="Copy" />
+                      </div>
                       <p className="text-gray-300 text-lg leading-relaxed bg-black/20 rounded-xl p-4 border border-white/5">
                         {response.answer}
                       </p>
                     </div>
 
+                    {/* Generated SQL */}
                     {response.sql_used && !response.is_meta_query && (
                       <div>
-                        <h3 className="text-lg font-semibold text-white mb-3">Generated SQL</h3>
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-lg font-semibold text-white">Generated SQL</h3>
+                          <CopyButton text={response.sql_used} id="sql" label="Copy SQL" />
+                        </div>
                         <pre className="bg-black/40 rounded-xl p-4 overflow-x-auto border border-emerald-500/20">
                           <code className="text-emerald-400 text-sm font-mono">{response.sql_used}</code>
                         </pre>
                       </div>
                     )}
 
+                    {/* Data Preview */}
                     {response.data_preview && response.data_preview.length > 0 && (
                       <div>
-                        <h3 className="text-lg font-semibold text-white mb-3">Data Preview</h3>
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-lg font-semibold text-white">Data Preview</h3>
+                          <button
+                            onClick={() => downloadCSV(response.data_preview!, "query_results.csv")}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-white/10"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <span>CSV</span>
+                          </button>
+                        </div>
                         <div className="overflow-x-auto rounded-xl border border-white/10">
                           <table className="w-full text-sm">
                             <thead className="bg-gradient-to-r from-cyan-500/10 to-emerald-500/10">
@@ -466,6 +647,32 @@ export default function Home() {
                       <span className="text-gray-500 text-sm">({response.reasoning_trace?.actions?.length ?? 0} steps)</span>
                     </div>
 
+                    {/* Agent Pipeline Visualization */}
+                    {response.reasoning_trace?.actions && response.reasoning_trace.actions.length > 0 && (
+                      <div className="mb-6 overflow-x-auto pb-2">
+                        <div className="flex items-center gap-1 min-w-max px-2">
+                          {response.reasoning_trace.actions
+                            .filter(a => !simpleMode || a.agent_name.includes("BATCH") || a.agent_name.includes("Safety") || a.agent_name.includes("Schema"))
+                            .map((action, i, arr) => {
+                              const name = action.agent_name.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim().split(' ').slice(0, 2).join(' ');
+                              const isLast = i === arr.length - 1;
+                              return (
+                                <div key={i} className="flex items-center gap-1">
+                                  <div className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-cyan-500/15 to-emerald-500/15 border border-cyan-500/20 text-[10px] text-cyan-300 font-medium whitespace-nowrap">
+                                    {name}
+                                  </div>
+                                  {!isLast && (
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-gray-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                                    </svg>
+                                  )}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Reasoning Steps */}
                     <div className="pl-4">
                       {(response.reasoning_trace?.actions || [])
@@ -499,6 +706,7 @@ export default function Home() {
             Built with Next.js
           </span>
           {" • 12 Agents • FastAPI Backend"}
+          <span className="hidden lg:inline"> • Ctrl+Enter to submit</span>
           {demoMode && <span className="ml-2 text-cyan-400">| Demo Mode</span>}
           {simpleMode && <span className="ml-2 text-emerald-400">| Simple Mode</span>}
         </footer>

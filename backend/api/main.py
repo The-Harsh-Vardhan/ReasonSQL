@@ -393,7 +393,7 @@ async def get_database_schema(database_id: str):
     """
     Get schema information for a registered database.
     
-    Returns all tables with their columns.
+    Returns all tables with their columns. Supports both SQLite and PostgreSQL.
     """
     db_info = _database_registry.get(database_id)
     if not db_info:
@@ -402,47 +402,24 @@ async def get_database_schema(database_id: str):
             detail=f"Database '{database_id}' not registered"
         )
     
-    if db_info["type"] != DatabaseType.SQLITE:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema introspection only supported for SQLite currently"
-        )
-    
-    file_path = db_info.get("file_path")
-    if not file_path or not os.path.exists(file_path):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database file not found: {file_path}"
-        )
-    
     try:
-        conn = sqlite3.connect(file_path)
-        cursor = conn.cursor()
+        from backend.db_connection import get_tables, get_table_columns, get_row_count
         
-        # Get all tables
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        table_names = [row[0] for row in cursor.fetchall()]
-        
+        table_names = get_tables()
         tables = []
         for table_name in table_names:
-            # Get columns
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = [
-                {"name": row[1], "type": row[2]}
-                for row in cursor.fetchall()
-            ]
-            
-            # Get row count
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-            row_count = cursor.fetchone()[0]
+            columns = get_table_columns(table_name)
+            col_list = [{"name": c["name"], "type": c.get("type", "unknown")} for c in columns]
+            try:
+                row_count = get_row_count(table_name)
+            except Exception:
+                row_count = None
             
             tables.append(TableSchema(
                 name=table_name,
-                columns=columns,
+                columns=col_list,
                 row_count=row_count
             ))
-        
-        conn.close()
         
         return SchemaResponse(
             database_id=database_id,
