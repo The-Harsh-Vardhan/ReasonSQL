@@ -148,7 +148,7 @@ DATABASE_TYPE = get_db_type()
 # =============================================================================
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash-exp")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash")
 
 # Token & call limits (prevents quota exhaustion)
 MAX_LLM_TOKENS = int(os.getenv("MAX_LLM_TOKENS", "256"))

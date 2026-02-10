@@ -39,7 +39,7 @@ services:
       - key: LLM_PROVIDER
         value: gemini
       - key: LLM_MODEL
-        value: gemini/gemini-2.0-flash-exp
+        value: gemini/gemini-2.0-flash
       - key: GROQ_FALLBACK_MODEL
         value: llama-3.1-8b-instant
       

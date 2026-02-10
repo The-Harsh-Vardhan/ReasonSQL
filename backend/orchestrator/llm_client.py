@@ -132,7 +132,7 @@ class GeminiClient(LLMClient):
     Automatically rotates through multiple API keys when quota is exhausted.
     """
     
-    def __init__(self, model: str = "gemini/gemini-2.0-flash-exp", verbose: bool = VERBOSE):
+    def __init__(self, model: str = "gemini/gemini-2.0-flash", verbose: bool = VERBOSE):
         super().__init__(model, verbose)
         self.provider = LLMProvider.GEMINI
         
@@ -366,7 +366,7 @@ class MultiProviderLLM:
     
     FALLBACK CHAIN (DETERMINISTIC):
     ================================
-    1. PRIMARY: Gemini (gemini-2.0-flash-exp)
+    1. PRIMARY: Gemini (gemini-2.0-flash)
        - Fast, high quality, preferred
        - Auto-fallback on quota exhaustion
     
@@ -400,7 +400,7 @@ class MultiProviderLLM:
         primary: str = "gemini",
         fallback: str = "groq",
         tertiary: Optional[str] = None,  # DISABLED by default (controlled by feature flag)
-        gemini_model: str = "gemini/gemini-2.0-flash-exp",
+        gemini_model: str = "gemini/gemini-2.0-flash",
         groq_model: str = "groq/llama-3.1-8b-instant",
 
         verbose: bool = VERBOSE
