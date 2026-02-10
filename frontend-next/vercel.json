@@ -31,7 +31,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://reasonsql-api.onrender.com/:path*"
+      "destination": "https://reasonsql-api-rl3g.onrender.com/:path*"
     }
   ]
 }
