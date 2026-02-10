@@ -76,7 +76,7 @@ from datetime import datetime, timedelta
 from configs import DATABASE_PATH, VERBOSE, DEFAULT_LIMIT, FORBIDDEN_KEYWORDS, get_gemini_key_count, MAX_LLM_CALLS_PER_QUERY
 from backend.db_connection import get_connection_context, get_db_type
 from backend.models import FinalResponse, ExecutionStatus, ReasoningTrace, AgentAction
-from .llm_client import create_llm_client, LLMError, LLMProvider
+from .llm_client import create_llm_client, LLMError, LLMProvider, QuotaExceededError
 from .json_utils import safe_parse_llm_json, JSONExtractionError
 
 
