@@ -163,12 +163,7 @@ def _get_postgres_connection():
     if not database_url:
         raise ValueError("DATABASE_URL environment variable not set")
     
-    # Debug: log what we received (mask password)
-    parsed = urlparse(database_url)
-    masked_pw = (parsed.password or "")[:3] + "***" if parsed.password else "NONE"
-    print(f"[DB] Connecting: user={parsed.username}, host={parsed.hostname}, port={parsed.port}, password={masked_pw}")
-    
-    # Check if existing connection is still valid
+    # Check if existing connection is still valid (BEFORE logging)
     if _pg_connection is not None:
         try:
             _pg_connection.cursor().execute("SELECT 1")
@@ -180,6 +175,11 @@ def _get_postgres_connection():
             except Exception:
                 pass
             _pg_connection = None
+    
+    # Only log when actually creating a NEW connection
+    parsed = urlparse(database_url)
+    masked_pw = (parsed.password or "")[:3] + "***" if parsed.password else "NONE"
+    print(f"[DB] Connecting: user={parsed.username}, host={parsed.hostname}, port={parsed.port}, password={masked_pw}")
     
     # For pooler URLs, connect using individual parameters to preserve hostname for SNI
     # and avoid any URL encoding/shell expansion issues with passwords
