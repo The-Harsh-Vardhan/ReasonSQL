@@ -154,7 +154,6 @@ ReasonSQL/
 ├── data/                       # Sample datasets (Chinook)
 ├── configs/                    # Environment & provider configs
 ├── docs/                       # Hosting & usage guides
-└── Extras/                     # Legacy code and documentation
 ```
 
 ---
@@ -183,7 +182,9 @@ See [HOSTING.md](docs/HOSTING.md) for detailed instructions.
 ## 📖 Documentation
 
 - [Hosting Guide](docs/HOSTING.md) — Step-by-step Supabase, Render, Vercel setup
-- [Agent Pipeline](Extras/AGENT_PIPELINE.md) — Complete 12-agent workflow (Legacy)
+- [Hosting Guide](docs/HOSTING.md) — Step-by-step Supabase, Render, Vercel setup
+- [Agent Pipeline](docs/AGENT_PIPELINE.md) — Complete 12-agent workflow (Legacy)
+- [Contributing Guide](CONTRIBUTING.md) — How to contribute
 - [Contributing Guide](CONTRIBUTING.md) — How to contribute
 
 ---
