@@ -517,8 +517,17 @@ async def execute_write_async(sql: str, params: Optional[tuple] = None) -> None:
     db_type = get_db_type()
     
     if db_type == "sqlite":
-        # Sync fallback — execute_query handles cursor.description is None
-        await asyncio.to_thread(execute_query, sql, params)
+        # Must use connection directly to commit writes
+        def _write_sqlite(sql, params):
+            from backend.db_connection import get_connection_context
+            with get_connection_context() as conn:
+                cursor = conn.cursor()
+                if params:
+                    cursor.execute(sql, params)
+                else:
+                    cursor.execute(sql)
+                conn.commit()
+        await asyncio.to_thread(_write_sqlite, sql, params)
         return
     
     # PostgreSQL Async
