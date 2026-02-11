@@ -1,5 +1,5 @@
 # Backend-only dependencies for ReasonSQL API
-# Install with: pip install -r backend/requirements.txt
+# Optimized for Render free tier (512MB RAM limit)
 
 # Core
 pydantic>=2.0.0
@@ -8,7 +8,6 @@ python-dotenv>=1.0.0
 # LLM providers
 google-generativeai>=0.3.0
 litellm>=1.0.0
-groq>=0.4.0
 
 # API server
 fastapi>=0.109.0
@@ -18,17 +17,9 @@ python-multipart>=0.0.9
 
 # Database
 psycopg2-binary>=2.9.0
-sqlalchemy>=2.0.0
 
 # CSV Upload
 pandas>=2.0.0
 
 # Utilities
 tabulate>=0.9.0
-rich>=13.0.0
-
-# Optional (heavy, skip on free tier to stay under 512MB):
-# sentence-transformers>=2.2.0  # ~400MB with PyTorch, for vector search
-# numpy>=1.24.0                 # required by sentence-transformers
-# asyncpg>=0.29.0               # async PG (not used, we use psycopg2)
-# redis>=5.0.0                  # for caching (uses in-memory fallback)

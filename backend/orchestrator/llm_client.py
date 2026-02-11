@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 
-from litellm import completion
+# from litellm import completion # Moved to inside functions for lazy loading
 from configs import VERBOSE, MAX_LLM_TOKENS, ENABLE_QWEN_FALLBACK
 
 
@@ -189,6 +189,7 @@ class GeminiClient(LLMClient):
             os.environ["GEMINI_API_KEY"] = current_key
             
             try:
+                from litellm import completion
                 response = completion(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
@@ -284,10 +285,11 @@ class GroqClient(LLMClient):
         self._log(f"Calling Groq ({self.model}) [max_tokens={MAX_LLM_TOKENS}]...")
         
         try:
+            from litellm import completion
             response = completion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,  # Low temperature for consistency
+                temperature=0.1,  # Low temperature for consistency
                 max_tokens=MAX_LLM_TOKENS,  # HARD CAP - prevents quota exhaustion
                 response_format=response_format
             )
@@ -341,11 +343,12 @@ class QwenClient(LLMClient):
         self._log(f"⚠️  WARNING: Both Gemini and Groq unavailable - using last-resort fallback")
         
         try:
+            from litellm import completion
             response = completion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,  # Deterministic
-                max_tokens=qwen_max_tokens,  # STRICT LIMIT
+                temperature=0.2, # Slightly higher for creativity?
+                max_tokens=512,   # Strict limit for fallback
                 stream=False,  # Disable streaming for safety
                 response_format=response_format
             )

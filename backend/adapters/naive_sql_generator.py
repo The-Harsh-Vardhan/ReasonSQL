@@ -36,7 +36,7 @@ from typing import Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 
-from litellm import completion
+# from litellm import completion # Lazy loaded instead
 from configs import DATABASE_PATH
 
 
@@ -160,6 +160,7 @@ Do not explain. Do not add comments. Just the SQL query."""
 
     try:
         # Single LLM call - no retries
+        from litellm import completion
         response = completion(
             model="groq/llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
