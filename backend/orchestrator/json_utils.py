@@ -171,7 +171,7 @@ def safe_parse_llm_json(text: str) -> Tuple[Dict[str, Any], Optional[str]]:
     except json.JSONDecodeError as e:
         raise JSONExtractionError(
             f"Extracted text is not valid JSON: {e}\n"
-            f"Extracted: {json_str[:200]}"
+            f"Extracted: {json_str[:1000]}"
         )
     
     # Step 3: Validate result is a dict (not array, string, etc.)

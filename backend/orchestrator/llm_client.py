@@ -96,7 +96,7 @@ class LLMClient(ABC):
         self.call_count = 0
     
     @abstractmethod
-    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None) -> LLMResponse:
+    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None, response_format: Optional[Dict[str, Any]] = None) -> LLMResponse:
         """
         Generate a response from the LLM.
         
@@ -158,7 +158,7 @@ class GeminiClient(LLMClient):
         self.key_cooldown_seconds = 60  # Reset exhausted keys after 60s
         self._log(f"Loaded {len(self.api_keys)} Gemini API key(s)")
     
-    def generate(self, prompt: str, metadata: Dict[str, Any] = None) -> LLMResponse:
+    def generate(self, prompt: str, metadata: Dict[str, Any] = None, response_format: Optional[Dict[str, Any]] = None) -> LLMResponse:
         """Generate response from Gemini with automatic key rotation."""
         import os
         
@@ -192,7 +192,8 @@ class GeminiClient(LLMClient):
                 response = completion(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3
+                    temperature=0.3,
+                    response_format=response_format
                 )
                 
                 self.call_count += 1
@@ -278,7 +279,7 @@ class GroqClient(LLMClient):
         self.provider = LLMProvider.GROQ
         self._log(f"✓ Groq initialized with SAFE model: {model}")
     
-    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None) -> LLMResponse:
+    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None, response_format: Optional[Dict[str, Any]] = None) -> LLMResponse:
         """Generate response from Groq with strict token limits."""
         self._log(f"Calling Groq ({self.model}) [max_tokens={MAX_LLM_TOKENS}]...")
         
@@ -287,7 +288,8 @@ class GroqClient(LLMClient):
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,  # Low temperature for consistency
-                max_tokens=MAX_LLM_TOKENS  # HARD CAP - prevents quota exhaustion
+                max_tokens=MAX_LLM_TOKENS,  # HARD CAP - prevents quota exhaustion
+                response_format=response_format
             )
             
             self.call_count += 1
@@ -330,7 +332,7 @@ class QwenClient(LLMClient):
         super().__init__(model, verbose)
         self.provider = LLMProvider.QWEN
     
-    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None) -> LLMResponse:
+    def generate(self, prompt: str, metadata: Optional[Dict[str, Any]] = None, response_format: Optional[Dict[str, Any]] = None) -> LLMResponse:
         """Generate response from Qwen with STRICT safety limits."""
         # CRITICAL: Qwen has LOWER token limit for safety
         qwen_max_tokens = min(MAX_LLM_TOKENS, 512)  # Never exceed 512
@@ -344,7 +346,8 @@ class QwenClient(LLMClient):
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,  # Deterministic
                 max_tokens=qwen_max_tokens,  # STRICT LIMIT
-                stream=False  # Disable streaming for safety
+                stream=False,  # Disable streaming for safety
+                response_format=response_format
             )
             
             self.call_count += 1
@@ -468,7 +471,7 @@ class MultiProviderLLM:
         # Provider attempt tracking (for reasoning trace)
         self.last_provider_attempts = []
     
-    def generate(self, prompt: str, metadata: Dict[str, Any] = None) -> LLMResponse:
+    def generate(self, prompt: str, metadata: Dict[str, Any] = None, response_format: Optional[Dict[str, Any]] = None) -> LLMResponse:
         """
         Generate response with automatic tertiary fallback.
         
@@ -500,11 +503,12 @@ class MultiProviderLLM:
         if self.provider_exhausted[self.primary_name]:
             self._log(f"⚠️ {self.primary_name.upper()} quota exhausted (known), skipping to secondary")
             return self._call_secondary(prompt, metadata, f"{self.primary_name} quota known to be exhausted")
+            return self._call_secondary(prompt, metadata, f"{self.primary_name} quota known to be exhausted", response_format)
         
         # ATTEMPT 1: Try primary provider
         try:
             self._log(f"→ Attempting PRIMARY provider: {self.primary_name.upper()}")
-            response = self.primary.generate(prompt, metadata)
+            response = self.primary.generate(prompt, metadata, response_format)
             
             # Track successful call
             self.stats[f"{self.primary_name}_calls"] += 1
@@ -523,15 +527,15 @@ class MultiProviderLLM:
             self._log(f"⚠️ PRIMARY provider failed: {reason}")
             
             # ATTEMPT 2: Fallback to secondary
-            return self._call_secondary(prompt, metadata, reason)
+            return self._call_secondary(prompt, metadata, reason, response_format)
         
         except LLMError as e:
             # For non-quota errors, still try secondary
             self._log(f"⚠️ PRIMARY provider error: {e}")
             
-            return self._call_secondary(prompt, metadata, str(e))
+            return self._call_secondary(prompt, metadata, str(e), response_format)
     
-    def _call_secondary(self, prompt: str, metadata: Optional[Dict[str, Any]], primary_reason: str) -> LLMResponse:
+    def _call_secondary(self, prompt: str, metadata: Optional[Dict[str, Any]], primary_reason: str, response_format: Optional[Dict[str, Any]] = None) -> LLMResponse:
         """
         Call secondary fallback provider (Groq).
         
@@ -555,7 +559,7 @@ class MultiProviderLLM:
         
         try:
             self._log(f"→ Attempting SECONDARY provider: {self.secondary_name.upper()}")
-            response = self.secondary.generate(prompt, metadata)
+            response = self.secondary.generate(prompt, metadata, response_format)
             
             # Track secondary call
             self.stats[f"{self.secondary_name}_calls"] += 1
@@ -582,7 +586,7 @@ class MultiProviderLLM:
             if self.tertiary_enabled:
                 # ATTEMPT 3: Last resort - try tertiary
                 self._log(f"   → Attempting tertiary fallback (Qwen)")
-                return self._call_tertiary(prompt, metadata, primary_reason, secondary_reason)
+                return self._call_tertiary(prompt, metadata, primary_reason, secondary_reason, response_format)
             else:
                 # Qwen disabled - graceful abort
                 self._log(f"   → Qwen disabled, initiating graceful abort")
@@ -595,13 +599,13 @@ class MultiProviderLLM:
             
             if self.tertiary_enabled:
                 # Try tertiary as last resort
-                return self._call_tertiary(prompt, metadata, primary_reason, secondary_reason)
+                return self._call_tertiary(prompt, metadata, primary_reason, secondary_reason, response_format)
             else:
                 # Qwen disabled - graceful abort
                 return self._graceful_abort(primary_reason, secondary_reason)
     
     def _call_tertiary(self, prompt: str, metadata: Optional[Dict[str, Any]], 
-                       primary_reason: str, secondary_reason: str) -> LLMResponse:
+                       primary_reason: str, secondary_reason: str, response_format: Optional[Dict[str, Any]] = None) -> LLMResponse:
         """
         Call tertiary fallback provider (Qwen) - LAST RESORT ONLY.
         
@@ -624,7 +628,7 @@ class MultiProviderLLM:
         self._log(f"⚠️ Secondary ({self.secondary_name}) failed: {secondary_reason}")
         
         try:
-            response = self.tertiary.generate(prompt, metadata)
+            response = self.tertiary.generate(prompt, metadata, response_format)
             
             # Track tertiary call
             self.stats[f"{self.tertiary_name}_calls"] += 1

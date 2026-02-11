@@ -507,7 +507,12 @@ class BatchOptimizedOrchestrator:
         try:
             # Call with automatic fallback (Gemini → Groq)
             # Run in thread to allow async event loop to proceed
-            llm_response = await asyncio.to_thread(self.llm.generate, prompt, metadata={"batch": batch_name})
+            llm_response = await asyncio.to_thread(
+                self.llm.generate, 
+                prompt, 
+                metadata={"batch": batch_name}, 
+                response_format={"type": "json_object"}
+            )
             content = llm_response.content
 
             # Record request
