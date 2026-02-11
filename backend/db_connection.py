@@ -410,6 +410,9 @@ def close_connections():
 # ASYNC CONNECTION MANAGEMENT
 # =============================================================================
 
+import asyncio
+from typing import Optional
+
 async def execute_query_async(sql: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
     """
     Execute SQL query asynchronously using thread pool.
