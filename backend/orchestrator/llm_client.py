@@ -502,7 +502,6 @@ class MultiProviderLLM:
         # Skip known-exhausted primary provider
         if self.provider_exhausted[self.primary_name]:
             self._log(f"⚠️ {self.primary_name.upper()} quota exhausted (known), skipping to secondary")
-            return self._call_secondary(prompt, metadata, f"{self.primary_name} quota known to be exhausted")
             return self._call_secondary(prompt, metadata, f"{self.primary_name} quota known to be exhausted", response_format)
         
         # ATTEMPT 1: Try primary provider
@@ -552,7 +551,7 @@ class MultiProviderLLM:
             
             if self.tertiary_enabled:
                 self._log(f"   → Skipping to tertiary fallback (Qwen)")
-                return self._call_tertiary(prompt, metadata, primary_reason, f"{self.secondary_name} quota exhausted")
+                return self._call_tertiary(prompt, metadata, primary_reason, f"{self.secondary_name} quota exhausted", response_format)
             else:
                 self._log(f"   → Qwen disabled, initiating graceful abort")
                 return self._graceful_abort(primary_reason, f"{self.secondary_name} quota exhausted")
