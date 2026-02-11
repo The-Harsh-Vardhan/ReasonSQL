@@ -137,6 +137,7 @@ npm install && npm run dev
 
 ## 📁 Project Structure
 
+```bash
 ReasonSQL/
 ├── backend/                    # Core modular API (FastAPI)
 │   ├── api/                    # Routers, deps, schemas
