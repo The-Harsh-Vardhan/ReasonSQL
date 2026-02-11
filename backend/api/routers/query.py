@@ -95,10 +95,9 @@ async def execute_query(request: QueryRequest):
     try:
         orchestrator = get_orchestrator()
 
-        # Run the synchronous orchestrator in a thread pool so we don't
-        # block the async event loop, and wrap with a timeout.
+        # Run the async orchestrator directly
         response = await asyncio.wait_for(
-            asyncio.to_thread(orchestrator.process_query, request.query),
+            orchestrator.process_query(request.query, history=request.history),
             timeout=QUERY_TIMEOUT_SECONDS,
         )
 

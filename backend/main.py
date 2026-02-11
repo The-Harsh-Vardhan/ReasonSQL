@@ -33,7 +33,8 @@ def process_single_query(query: str, verbose: bool = True) -> FinalResponse:
     Returns:
         FinalResponse with answer, SQL, and reasoning trace
     """
-    return run_query(query, verbose=verbose)
+    import asyncio
+    return asyncio.run(run_query(query, verbose=verbose))
 
 
 def main():

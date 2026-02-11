@@ -24,7 +24,7 @@ from configs import DATABASE_PATH, DATABASE_URL
 
 from .deps import database_registry, logger, get_orchestrator
 from .schemas import DatabaseType
-from .routers import query, databases, system
+from .routers import query, databases, system, upload
 
 
 # =============================================================================
@@ -115,6 +115,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("ReasonSQL API shutting down.")
+    from backend.db_connection import close_async_pool
+    await close_async_pool()
 
 
 # =============================================================================
@@ -153,6 +155,7 @@ app.add_middleware(
 app.include_router(system.router)
 app.include_router(query.router)
 app.include_router(databases.router)
+app.include_router(upload.router)
 
 
 # =============================================================================

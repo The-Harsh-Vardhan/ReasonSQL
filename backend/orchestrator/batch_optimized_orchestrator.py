@@ -73,11 +73,15 @@ from dataclasses import dataclass, field
 from collections import deque
 from datetime import datetime, timedelta
 
+import asyncio
 from configs import DATABASE_PATH, VERBOSE, DEFAULT_LIMIT, FORBIDDEN_KEYWORDS, get_gemini_key_count, MAX_LLM_CALLS_PER_QUERY
-from backend.db_connection import get_connection_context, get_db_type
+from backend.db_connection import get_connection_context, get_db_type, execute_query_async
 from backend.models import FinalResponse, ExecutionStatus, ReasoningTrace, AgentAction
 from .llm_client import create_llm_client, LLMError, LLMProvider, QuotaExceededError
 from .json_utils import safe_parse_llm_json, JSONExtractionError
+from backend.utils.cache import cache_manager
+from backend.utils.vector_search import schema_vector_store
+import hashlib
 
 
 # ============================================================
@@ -173,6 +177,9 @@ class BatchPipelineState:
     
     # Reasoning trace (ALWAYS populated - initialized in process_query)
     reasoning_trace: Optional['ReasoningTrace'] = field(default=None)
+    
+    # NEW: Conversation History
+    history: List[Dict[str, str]] = field(default_factory=list)
     
     # Agent outputs (populated by batches)
     # BATCH 1: Reasoning & Planning
@@ -306,33 +313,24 @@ class BatchOptimizedOrchestrator:
         """Alias for backward compatibility."""
         return self.process_query(user_query)
     
-    def process_query(self, user_query: str) -> FinalResponse:
+    async def process_query(self, user_query: str, history: List[Dict[str, str]] = None) -> FinalResponse:
         """
-        Process query with batched LLM calls.
-        
-        Expected flow:
-        1. BATCH 1: Reasoning & Planning (1 API call)
-        2. Schema/Data exploration (deterministic, 0 API calls)
-        3. BATCH 2: SQL Generation (1 API call)
-        4. Safety/Execution (deterministic, 0 API calls)
-        5. BATCH 3: Correction if needed (conditional, 0-2 API calls)
-        6. BATCH 4: Response (1 API call)
-        
-        Total: 2-5 API calls depending on corrections
+        Process query with batched LLM calls (ASYNC).
+        History format: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
         """
         state = BatchPipelineState(
             user_query=user_query,
+            history=history or [],
             start_time_ms=time.time() * 1000
         )
         
         # CRITICAL: Initialize reasoning_trace immediately
-        # This ensures it exists even if we abort early
         state.reasoning_trace = ReasoningTrace(
             user_query=user_query,
             actions=[],
             total_time_ms=0,
             correction_attempts=0,
-            final_status=ExecutionStatus.SUCCESS  # Will be updated
+            final_status=ExecutionStatus.SUCCESS
         )
         
         self._log(f"{'='*60}")
@@ -343,52 +341,43 @@ class BatchOptimizedOrchestrator:
         try:
             # BATCH 1: Reasoning & Planning (Intent, Clarify, Decompose, Plan)
             self._log("→ BATCH 1: Reasoning & Planning [LLM]")
-            state = self._batch_1_reasoning_and_planning(state)
+            state = await self._batch_1_reasoning_and_planning(state)
             
             if state.intent == "AMBIGUOUS" and not state.resolved_query:
                 return self._abort(state, "Unresolved ambiguity")
             
             # Deterministic: Schema Exploration
             self._log("→ SchemaExplorer [Deterministic]")
-            state = self._deterministic_schema_exploration(state)
+            state = await self._deterministic_schema_exploration(state)
             
-            # ============================================================
-            # CRITICAL EARLY-EXIT: Meta-Query Handling
-            # ============================================================
-            # Intent is IMMUTABLE (set in BATCH 1).
-            # Meta-queries MUST exit here - they NEVER execute SQL.
-            # This is the ONLY place meta-query handling occurs.
-            # ============================================================
+            # Meta-Query Handling
             if state.intent == "META_QUERY":
                 self._log("→ META_QUERY detected, skipping SQL generation")
-                state = self._batch_4_response_synthesis(state)
-                # sql_was_executed remains False - critical for invariant checks
+                state = await self._batch_4_response_synthesis(state)
                 return self._finalize(state)
             
-            # Deterministic: Data Exploration (if needed)
+            # Deterministic: Data Exploration
             if state.needs_data_context:
                 self._log("→ DataExplorer [Deterministic]")
-                state = self._deterministic_data_exploration(state)
+                state = await self._deterministic_data_exploration(state)
             
             # BATCH 2: SQL Generation
             self._log("→ BATCH 2: SQL Generation [LLM]")
-            state = self._batch_2_sql_generation(state)
+            state = await self._batch_2_sql_generation(state)
             
-            # Deterministic: Safety Validation
+            # Deterministic: Safety Validation (Sync)
             self._log("→ SafetyValidator [Deterministic]")
             state = self._deterministic_safety_validation(state)
             
-            # If FK violations detected, trigger self-correction immediately
+            # FK Violations
             if state.fk_violations:
                 self._log(f"→ FK VIOLATIONS detected: {len(state.fk_violations)} issues")
                 
                 retry_loop = 0
                 while retry_loop <= state.max_retries:
-                    # Try self-correction
                     self._log(f"→ BATCH 3: FK Self-Correction [LLM] (attempt {retry_loop + 1})")
-                    state = self._batch_3_self_correction(state)
+                    state = await self._batch_3_self_correction(state)
                     
-                    # Re-validate corrected SQL
                     state = self._deterministic_safety_validation(state)
                     
                     if state.safety_approved:
@@ -405,26 +394,24 @@ class BatchOptimizedOrchestrator:
             if not state.safety_approved:
                 return self._abort(state, f"Safety violations: {state.safety_violations}")
             
-            # Deterministic: SQL Execution (with retry loop)
+            # Deterministic: SQL Execution
             retry_loop = 0
             while retry_loop <= state.max_retries:
                 self._log(f"→ SQLExecutor [Deterministic] (attempt {retry_loop + 1})")
-                state = self._deterministic_sql_execution(state)
-                state.sql_was_executed = True  # Mark SQL execution occurred
+                state = await self._deterministic_sql_execution(state)
+                state.sql_was_executed = True
                 
                 if not state.execution_error:
-                    break  # Success
+                    break
                 
                 # Retry with correction
                 if retry_loop < state.max_retries:
                     self._log(f"→ BATCH 3: Self-Correction [LLM] (retry {retry_loop + 1})")
-                    state = self._batch_3_self_correction(state)
+                    state = await self._batch_3_self_correction(state)
                     
-                    # Re-validate corrected SQL
                     state = self._deterministic_safety_validation(state)
                     if not state.safety_approved:
                         violations_detail = "; ".join(state.safety_violations)
-                        self._log(f"→ Corrected SQL still has violations: {violations_detail}")
                         return self._abort(state, f"Corrected SQL failed safety check: {violations_detail}")
                     
                     retry_loop += 1
@@ -433,23 +420,17 @@ class BatchOptimizedOrchestrator:
                     self._log("→ Max retries reached")
                     break
             
-            # Deterministic: Result Validation
+            # Deterministic: Result Validation (Sync)
             if not state.execution_error:
                 self._log("→ ResultValidator [Deterministic]")
                 state = self._deterministic_result_validation(state)
             
             # BATCH 4: Response Synthesis
-            # CRITICAL: Always call ResponseSynthesizer for DATA_QUERY
-            # (intent was set in BATCH 1 and is immutable)
             self._log("→ BATCH 4: Response Synthesis [LLM]")
-            state = self._batch_4_response_synthesis(state)
+            state = await self._batch_4_response_synthesis(state)
             
-            # FINAL INVARIANT CHECK before returning
             if state.intent == "DATA_QUERY" and not state.final_answer:
-                raise RuntimeError(
-                    f"CRITICAL BUG: DATA_QUERY but ResponseSynthesizer did not generate answer. "
-                    f"Answer: {state.final_answer}"
-                )
+                raise RuntimeError("CRITICAL BUG: DATA_QUERY but ResponseSynthesizer did not generate answer.")
             
             return self._finalize(state)
         
@@ -457,17 +438,9 @@ class BatchOptimizedOrchestrator:
             self._log(f"⚠️ RATE LIMIT EXCEEDED: {e}")
             return self._abort(state, str(e))
         except QuotaExceededError as e:
-            # LLM quota exhausted across all enabled providers - graceful abort
             self._log("⚠️ LLM QUOTA EXHAUSTED - returning graceful failure")
-            
-            # Get provider attempt history for reasoning trace
             provider_stats = self.llm.get_stats()
             provider_attempts = provider_stats.get('last_provider_attempts', [])
-            fallback_chain = provider_stats.get('fallback_chain', 'unknown')
-            
-            self._log(f"   Fallback chain: {fallback_chain}")
-            self._log(f"   Provider attempts: {len(provider_attempts)}")
-            
             return self._abort_quota_exhausted(state, str(e), provider_attempts)
         except Exception as e:
             self._log(f"⚠️ ERROR: {e}")
@@ -477,7 +450,7 @@ class BatchOptimizedOrchestrator:
     # CENTRALIZED LLM CALLER
     # ============================================================
     
-    def call_llm_batch(self, batch_name: str, roles: List[str], 
+    async def call_llm_batch(self, batch_name: str, roles: List[str], 
                        prompt: str, state: BatchPipelineState) -> Dict[str, Any]:
         """
         Centralized LLM batch caller with automatic fallback and strict quota enforcement.
@@ -508,28 +481,40 @@ class BatchOptimizedOrchestrator:
                 f"Maximum LLM calls per query exceeded: {state.llm_calls_made}/{MAX_LLM_CALLS_PER_QUERY}. "
                 f"This prevents quota exhaustion. Increase MAX_LLM_CALLS_PER_QUERY in .env if needed."
             )
-        
+
         # Check rate limit
         if not self.rate_limiter.can_proceed():
             wait_time = self.rate_limiter.wait_time()
-            raise RateLimitExceeded(
-                f"Rate limit of {self.rate_limiter.max_requests} requests/minute exceeded. "
-                f"Would need to wait {wait_time:.1f}s. Aborting to prevent overrun."
-            )
-        
+            self._log(f"Rate limit active. Waiting {wait_time:.1f}s...")
+            await asyncio.sleep(wait_time)
+
+        # ------------------------------------------------------------
+        # CACHE CHECK
+        # ------------------------------------------------------------
+        # Generate cache key based on prompt and roles (ignore state)
+        key_str = f"{batch_name}:{','.join(sorted(roles))}:{prompt}"
+        key_hash = hashlib.md5(key_str.encode()).hexdigest()
+        cache_key = f"llm_response:{key_hash}"
+
+        cached_result = await cache_manager.get(cache_key)
+        if cached_result:
+            self._log(f"⚡ Cache HIT for {batch_name}")
+            return cached_result
+
         # Make LLM call with automatic fallback
         self._log(f"  → Calling LLM for: {', '.join(roles)}")
-        
+
         try:
             # Call with automatic fallback (Gemini → Groq)
-            llm_response = self.llm.generate(prompt, metadata={"batch": batch_name})
+            # Run in thread to allow async event loop to proceed
+            llm_response = await asyncio.to_thread(self.llm.generate, prompt, metadata={"batch": batch_name})
             content = llm_response.content
-            
+
             # Record request
             self.rate_limiter.record_request()
             state.llm_calls_made += 1
             state.batches_executed.append(batch_name)
-            
+
             # Track provider used with clear labels
             provider_name = llm_response.provider.value
             
@@ -545,7 +530,7 @@ class BatchOptimizedOrchestrator:
                 provider_label = "Qwen2.5-Coder-32B (Tertiary/Last-Resort Fallback)"
             else:
                 provider_label = provider_name
-            
+
             provider_info = {
                 "batch": batch_name,
                 "provider": provider_name,
@@ -558,9 +543,9 @@ class BatchOptimizedOrchestrator:
                 # Add warning for tertiary fallback
                 if provider_name == "qwen":
                     provider_info["warning"] = "⚠️ Tertiary fallback model used - both Gemini and Groq unavailable"
-            
+
             state.providers_used.append(provider_info)
-            
+
             # Log provider used with clear indication of fallback level
             if llm_response.fallback_occurred:
                 if provider_name == "qwen":
@@ -571,11 +556,11 @@ class BatchOptimizedOrchestrator:
                     self._log(f"  Reason: {llm_response.fallback_reason}")
             else:
                 self._log(f"  ✓ {llm_response.provider.value.upper()} call successful")
-            
+
             # SAFE JSON PARSING: Extract first JSON object, ignore extra text
             try:
-                result, stripped_text = safe_parse_llm_json(content)
-                
+                result_json, stripped_text = safe_parse_llm_json(content)
+
                 # Log if extra text was stripped (transparency)
                 if stripped_text:
                     stripped_preview = stripped_text[:100]
@@ -591,10 +576,17 @@ class BatchOptimizedOrchestrator:
                                 reasoning=f"LLM returned JSON + commentary. Stripped {len(stripped_text)} characters."
                             )
                         )
-                
+
+                # Validate structure (basic check)
+                if not isinstance(result_json, dict):
+                    raise JSONExtractionError("LLM response is not a JSON object")
+
+                # CACHE RESULT
+                await cache_manager.set(cache_key, result_json)
+
                 self._log(f"  ✓ JSON parsed successfully (Total: {state.llm_calls_made}, Remaining: {self.rate_limiter.get_status()['remaining']})")
-                return result
-            
+                return result_json
+
             except JSONExtractionError as e:
                 self._log(f"  ✗ JSON extraction failed: {e}")
                 self._log(f"  Raw LLM response: '{content[:500]}'...")
@@ -605,13 +597,13 @@ class BatchOptimizedOrchestrator:
         except Exception as e:
             self._log(f"  ✗ Unexpected error: {e}")
             raise
-    
+
     # ============================================================
     # BATCH 1: REASONING & PLANNING
     # Consolidates: IntentAnalyzer, ClarificationAgent, QueryDecomposer, QueryPlanner
     # ============================================================
-    
-    def _batch_1_reasoning_and_planning(self, state: BatchPipelineState) -> BatchPipelineState:
+
+    async def _batch_1_reasoning_and_planning(self, state: BatchPipelineState) -> BatchPipelineState:
         """
         Single LLM call executing 4 logical agents:
         1. IntentAnalyzer: Classify intent (DATA/META/AMBIGUOUS)
@@ -619,30 +611,41 @@ class BatchOptimizedOrchestrator:
         3. QueryDecomposer: Break into steps if complex
         4. QueryPlanner: Design query plan
         """
-        prompt = f"""You are a multi-agent NL2SQL system. Analyze this query through 4 sequential agent roles.
-Return a JSON object with results from each agent.
+        # Format history for prompt
+        history_text = ""
+        if state.history:
+            history_text = "CONVERSATION HISTORY:\n"
+            for msg in state.history[-5:]: # Last 5 messages
+                role = msg.get("role", "unknown").upper()
+                content = msg.get("content", "")
+                history_text += f"- {role}: {content}\n"
+            history_text += "\n"
 
-USER QUERY: {state.user_query}
+        prompt = f"""You are a Multi-Agent SQL Reasoning Team. Analyze the user query.
+        
+{history_text}USER QUERY: {state.user_query}
+DATABASE SCHEMA: {state.schema_context}
 
-Execute these agents in order:
-
+ROLES & RESPONSIBILITIES:
 1. **IntentAnalyzer**: Classify intent
    - "DATA_QUERY": Requesting data from database
    - "META_QUERY": Asking about database structure (what tables, columns, etc.)
-   - "AMBIGUOUS": Queries with subjective terms ("recent", "best", "top", "some") WITHOUT explicit qualifiers (like "top 5"). 
+   - "AMBIGUOUS": Queries with subjective terms ("recent", "best", "top", "some") WITHOUT explicit qualifiers.
      - CRITICAL: subjective terms = AMBIGUOUS. Do not guess.
+     - NEW: Check CONVERSATION HISTORY to resolve pronouns like "it", "them", "their", "previous". 
+       If "show me *their* sales" follows a query about "Taylor Swift", intent is DATA_QUERY for "Taylor Swift".
 
 2. **ClarificationAgent**: Resolve ambiguities
    - If AMBIGUOUS: Generate 2-3 specific clarification questions.
    - If NOT ambiguous: List assumptions made (e.g., "top" implies ORDER BY DESC LIMIT 5).
    - "has_ambiguity": true if subjective terms are present.
    - "clarification_questions": ["question 1", "question 2"] (Required if AMBIGUOUS)
-   
+
 3. **QueryDecomposer**: Analyze complexity
    - Is this a simple or complex query?
    - Does it need data context (date ranges, value samples)?
    - Break into logical steps if complex
-   
+
 4. **QueryPlanner**: Design the query plan
    - What tables are needed?
    - What joins are required?
@@ -673,33 +676,33 @@ Return JSON in this EXACT format:
   }}
 }}
 """
-        
-        result = self.call_llm_batch(
+
+        result = await self.call_llm_batch(
             batch_name="BATCH 1: Reasoning & Planning",
             roles=["IntentAnalyzer", "ClarificationAgent", "QueryDecomposer", "QueryPlanner"],
             prompt=prompt,
             state=state
         )
-        
+
         # Extract results
         intent_data = result.get("intent_analyzer", {})
         clarify_data = result.get("clarification_agent", {})
         decomp_data = result.get("query_decomposer", {})
         plan_data = result.get("query_planner", {})
-        
+
         # Populate state
         state.intent = intent_data.get("intent", "DATA_QUERY")
         state.intent_confidence = intent_data.get("confidence", 0.0)
         state.resolved_query = clarify_data.get("resolved_query", state.user_query)
         state.assumptions = clarify_data.get("assumptions", [])
         clarification_questions = clarify_data.get("clarification_questions", [])
-        
+
         state.is_complex = decomp_data.get("is_complex", False)
         state.needs_data_context = decomp_data.get("needs_data_context", False)
         state.decomposition_steps = decomp_data.get("steps", [])
         state.relevant_tables = plan_data.get("relevant_tables", [])
         state.query_plan = plan_data.get("plan_description", "")
-        
+
         # Handle AMBIGUOUS intent
         if state.intent == "AMBIGUOUS":
             reasoning = intent_data.get("reasoning", "Subjective terms detected.")
@@ -710,21 +713,21 @@ Return JSON in this EXACT format:
                 f"**Please clarify:**\n{questions_text}"
             )
             state.reasoning_trace.final_status = ExecutionStatus.BLOCKED
-            
+
             # Log trace and return early
-            state.add_trace("IntentAnalyzer", 
+            state.add_trace("IntentAnalyzer",
                         f"Intent: {state.intent} (confidence: {state.intent_confidence:.2f})",
                         reasoning)
             state.add_trace("ClarificationAgent",
                         "Identified Ambiguity",
                         f"Questions:\n{questions_text}")
-            
+
             # Since we abort here, we must finalize
             self._finalize(state)
             return state
 
         # Log all 4 agents (Normal flow)
-        state.add_trace("IntentAnalyzer", 
+        state.add_trace("IntentAnalyzer",
                        f"Intent: {state.intent} (confidence: {state.intent_confidence:.2f})",
                        intent_data.get("reasoning", ""))
         state.add_trace("ClarificationAgent",
@@ -736,83 +739,97 @@ Return JSON in this EXACT format:
         state.add_trace("QueryPlanner",
                        f"Tables: {state.relevant_tables}",
                        state.query_plan)
-        
+
         return state
-    
+
     # ============================================================
     # DETERMINISTIC AGENTS (No LLM calls)
     # ============================================================
-    
-    def _deterministic_schema_exploration(self, state: BatchPipelineState) -> BatchPipelineState:
-        """SchemaExplorer: Pure database introspection."""
+
+    async def _deterministic_schema_exploration(self, state: BatchPipelineState) -> BatchPipelineState:
+        """SchemaExplorer: Pure database introspection (Async)."""
         try:
             db_type = get_db_type()
-            
-            with get_connection_context() as conn:
-                cursor = conn.cursor()
-                
-                # Get all tables
+
+            # Get all tables
+            if db_type == "sqlite":
+                rows = await execute_query_async("SELECT name FROM sqlite_master WHERE type='table';")
+                tables = [row['name'] for row in rows]
+            else:
+                rows = await execute_query_async("""
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                """)
+                tables = [row['table_name'] for row in rows]
+
+            # Build schema context and populate vector store
+            all_schema_parts = {}
+            for table in tables:
                 if db_type == "sqlite":
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                    tables = [row[0] for row in cursor.fetchall()]
+                    cols = await execute_query_async(f"PRAGMA table_info({table});")
+                    col_str = ", ".join([f"{c['name']} {c['type']}" for c in cols])
                 else:
-                    cursor.execute("""
-                        SELECT table_name FROM information_schema.tables 
-                        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-                    """)
-                    tables = [row[0] if isinstance(row, tuple) else row['table_name'] for row in cursor.fetchall()]
+                    cols = await execute_query_async("""
+                        SELECT column_name, data_type FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = %s
+                        ORDER BY ordinal_position
+                    """, (table,))
+                    col_str = ", ".join([f"{c['column_name']} {c['data_type']}" for c in cols])
                 
-                # Build schema context
-                schema_parts = []
-                for table in tables:
-                    if db_type == "sqlite":
-                        cursor.execute(f"PRAGMA table_info({table});")
-                        columns = cursor.fetchall()
-                        col_str = ", ".join([f"{c[1]} {c[2]}" for c in columns])
-                    else:
-                        cursor.execute("""
-                            SELECT column_name, data_type FROM information_schema.columns
-                            WHERE table_schema = 'public' AND table_name = %s
-                            ORDER BY ordinal_position
-                        """, (table,))
-                        columns = cursor.fetchall()
-                        col_str = ", ".join([f"{c[0] if isinstance(c, tuple) else c['column_name']} {c[1] if isinstance(c, tuple) else c['data_type']}" for c in columns])
-                    schema_parts.append(f"{table}({col_str})")
+                schema_str = f"{table}({col_str})"
+                all_schema_parts[table] = schema_str
                 
-                state.schema_context = "; ".join(schema_parts)
+                # Add to vector store (idempotent-ish check inside not needed as add_table overwrites/updates)
+                # But to avoid re-embedding every query in a real app, we might check keys.
+                # For now, we'll blindly add to ensure it's up to date.
+                # In production, this should be done at startup or background.
+                if table not in schema_vector_store.table_embeddings:
+                     schema_vector_store.add_table(table, schema_str)
+
+            # RAG SELECTION
+            # If > 15 tables, use vector search to find top 10 relevant ones
+            if len(tables) > 15:
+                relevant_tables = schema_vector_store.search(state.user_query, k=10)
+                # Always include 'relevant_tables' found by RAG
+                final_parts = [all_schema_parts[t] for t in relevant_tables if t in all_schema_parts]
                 
-                state.add_trace("SchemaExplorer",
-                               f"Found {len(tables)} tables",
-                               state.schema_context[:200] + "...")
+                # Fallback: if RAG returned nothing (error?) or very few, might want to ensure we have something.
+                if not final_parts:
+                     final_parts = list(all_schema_parts.values())[:10]
+                
+                state.schema_context = "; ".join(final_parts)
+                rag_status = f"RAG Active (Selected {len(final_parts)}/{len(tables)} tables)"
+            else:
+                state.schema_context = "; ".join(all_schema_parts.values())
+                rag_status = f"Full Schema ({len(tables)} tables)"
+
+            state.add_trace("SchemaExplorer",
+                           rag_status,
+                           state.schema_context[:200] + "...")
         except Exception as e:
             state.add_trace("SchemaExplorer", f"Error: {e}", "")
-        
+
         return state
-    
-    def _deterministic_data_exploration(self, state: BatchPipelineState) -> BatchPipelineState:
-        """DataExplorer: Sample data from relevant tables."""
+
+    async def _deterministic_data_exploration(self, state: BatchPipelineState) -> BatchPipelineState:
+        """DataExplorer: Sample data from relevant tables (Async)."""
         try:
-            with get_connection_context() as conn:
-                cursor = conn.cursor()
-                
-                for table in state.relevant_tables[:3]:  # Limit to 3 tables
-                    cursor.execute(f"SELECT * FROM {table} LIMIT 3;")
-                    samples = cursor.fetchall()
-                    # Handle both tuple and dict row formats
-                    state.data_samples[table] = [list(row) if isinstance(row, tuple) else list(row.values()) for row in samples]
-                
-                state.add_trace("DataExplorer",
-                               f"Sampled {len(state.data_samples)} tables",
-                               str(list(state.data_samples.keys())))
+            for table in state.relevant_tables[:3]:  # Limit to 3 tables
+                rows = await execute_query_async(f"SELECT * FROM {table} LIMIT 3;")
+                state.data_samples[table] = [list(row.values()) for row in rows]
+
+            state.add_trace("DataExplorer",
+                           f"Sampled {len(state.data_samples)} tables",
+                           str(list(state.data_samples.keys())))
         except Exception as e:
             state.add_trace("DataExplorer", f"Error: {e}", "")
-        
+
         return state
-    
+
     def _deterministic_safety_validation(self, state: BatchPipelineState) -> BatchPipelineState:
         """
         SafetyValidator: Rule-based SQL safety checks + FK JOIN validation.
-        
+
         Validates:
         1. No forbidden keywords (INSERT, DELETE, DROP, etc.)
         2. LIMIT clause present
@@ -822,13 +839,13 @@ Return JSON in this EXACT format:
         sql = state.corrected_sql if state.corrected_sql else state.generated_sql
         violations = []
         fk_violations = []
-        
+
         # Check forbidden keywords
         sql_upper = sql.upper()
         for keyword in FORBIDDEN_KEYWORDS:
             if keyword in sql_upper:
                 violations.append(f"Forbidden keyword: {keyword}")
-        
+
         # Auto-add LIMIT if missing (instead of rejecting)
         if "LIMIT" not in sql_upper:
             # Add LIMIT to the SQL
@@ -840,21 +857,21 @@ Return JSON in this EXACT format:
                 state.generated_sql = sql
             # Log that we auto-added LIMIT
             state.add_trace("SafetyValidator", "Auto-added LIMIT 100 clause", sql[:100])
-        
+
         # Check for SELECT *
         if "SELECT *" in sql_upper or "SELECT*" in sql_upper:
             violations.append("SELECT * is forbidden")
-        
+
         # CRITICAL: Validate all JOIN conditions against schema FK relationships
         join_conditions = self.schema_graph.get_all_joins_in_sql(sql)
-        
+
         if join_conditions:
             for join_cond in join_conditions:
                 is_valid, error_msg = self.schema_graph.validate_join_condition(join_cond)
-                
+
                 if not is_valid:
                     fk_violations.append(error_msg)
-                    
+
                     # Extract table names for suggestion
                     import re
                     pattern = r'(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)'
@@ -885,32 +902,30 @@ Return JSON in this EXACT format:
         return state
 
     
-    def _deterministic_sql_execution(self, state: BatchPipelineState) -> BatchPipelineState:
-        """SQLExecutor: Execute SQL query."""
+    async def _deterministic_sql_execution(self, state: BatchPipelineState) -> BatchPipelineState:
+        """SQLExecutor: Execute the generated SQL (Async)."""
         sql = state.corrected_sql if state.corrected_sql else state.generated_sql
         
         try:
-            with get_connection_context() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql)
-                results = cursor.fetchall()
-                
-                # Handle both tuple and dict row formats
-                state.execution_result = [list(row) if isinstance(row, tuple) else list(row.values()) for row in results]
-                state.row_count = len(results)
-                state.execution_error = ""
-                
-                state.add_trace("SQLExecutor",
-                               f"✓ Success: {state.row_count} rows",
-                               sql)
-        except Exception as e:
-            state.execution_error = str(e)
-            state.execution_result = None
-            state.row_count = 0
+            import time
+            start_time = time.time()
+            results = await execute_query_async(sql)
+            duration = (time.time() - start_time) * 1000
+            
+            state.execution_result = results
+            # Results are list of dicts
+            state.row_count = len(results)
             
             state.add_trace("SQLExecutor",
-                           f"✗ Error: {e}",
-                           sql)
+                           f"Executed successfully ({duration:.0f}ms)",
+                           f"Returned {state.row_count} rows")
+                           
+        except Exception as e:
+            state.execution_result = None
+            state.execution_error = str(e)
+            state.add_trace("SQLExecutor",
+                           f"Execution Failed",
+                           f"Error: {str(e)}")
         
         return state
     
@@ -940,7 +955,7 @@ Return JSON in this EXACT format:
     # BATCH 2: SQL GENERATION
     # ============================================================
     
-    def _batch_2_sql_generation(self, state: BatchPipelineState) -> BatchPipelineState:
+    async def _batch_2_sql_generation(self, state: BatchPipelineState) -> BatchPipelineState:
         """Single LLM call for SQLGenerator agent."""
         prompt = f"""You are SQLGenerator agent. Generate valid SQLite SQL for this query.
 
@@ -962,7 +977,7 @@ Return JSON:
 }}
 """
         
-        result = self.call_llm_batch(
+        result = await self.call_llm_batch(
             batch_name="BATCH 2: SQL Generation",
             roles=["SQLGenerator"],
             prompt=prompt,
@@ -982,7 +997,7 @@ Return JSON:
     # BATCH 3: SELF-CORRECTION (Conditional)
     # ============================================================
     
-    def _batch_3_self_correction(self, state: BatchPipelineState) -> BatchPipelineState:
+    async def _batch_3_self_correction(self, state: BatchPipelineState) -> BatchPipelineState:
         """Single LLM call for SelfCorrectionAgent (handles execution errors AND FK violations)."""
         
         # Determine if this is a FK violation or execution error
@@ -1032,7 +1047,7 @@ Return JSON:
 }}
 """
         
-        result = self.call_llm_batch(
+        result = await self.call_llm_batch(
             batch_name="BATCH 3: Self-Correction",
             roles=["SelfCorrectionAgent"],
             prompt=prompt,
@@ -1059,7 +1074,7 @@ Return JSON:
     # BATCH 4: RESPONSE SYNTHESIS
     # ============================================================
     
-    def _batch_4_response_synthesis(self, state: BatchPipelineState) -> BatchPipelineState:
+    async def _batch_4_response_synthesis(self, state: BatchPipelineState) -> BatchPipelineState:
         """Single LLM call for ResponseSynthesizer agent."""
         # Handle META_QUERY differently - use schema context instead of query results
         if state.intent == "META_QUERY":
@@ -1109,7 +1124,7 @@ Return JSON:
 }}
 """
         
-        result = self.call_llm_batch(
+        result = await self.call_llm_batch(
             batch_name="BATCH 4: Response Synthesis",
             roles=["ResponseSynthesizer"],
             prompt=prompt,
@@ -1381,7 +1396,7 @@ Return JSON:
 # CONVENIENCE FUNCTION
 # ============================================================
 
-def run_query(query: str, verbose: bool = VERBOSE) -> FinalResponse:
-    """Run a query with the batch-optimized orchestrator."""
+async def run_query(query: str, verbose: bool = VERBOSE, history: List[Dict[str, str]] = None) -> FinalResponse:
+    """Run a query with the batch-optimized orchestrator (Async)."""
     orchestrator = BatchOptimizedOrchestrator(verbose=verbose)
-    return orchestrator.process_query(query)
+    return await orchestrator.process_query(query, history=history)

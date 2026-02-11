@@ -191,11 +191,20 @@ function HomeInner() {
 
     const startTime = Date.now();
 
+    // Prepare history (last 5 messages)
+    const history = queryHistory.slice(-5).map(entry => [
+      { role: "user", content: entry.query },
+      { role: "assistant", content: entry.success ? "Result returned successfully." : "Error occurred." } // Simplified for now
+    ]).flat();
+
     try {
       const res = await fetch(buildApiUrl("query"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: query.trim() }),
+        body: JSON.stringify({
+          query: query.trim(),
+          history: history
+        }),
       });
 
       if (!res.ok) {

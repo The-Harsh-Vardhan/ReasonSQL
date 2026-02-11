@@ -38,6 +38,10 @@ class QueryRequest(BaseModel):
         default="default", 
         description="Database identifier (default uses configured SQLite)"
     )
+    history: Optional[List[Dict[str, str]]] = Field(
+        default_factory=list,
+        description="Conversation history (user/assistant messages)"
+    )
     
     model_config = {
         "json_schema_extra": {

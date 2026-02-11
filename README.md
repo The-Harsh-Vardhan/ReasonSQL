@@ -1,6 +1,7 @@
 # ReasonSQL - Multi-Agent NL→SQL System
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![CI](https://github.com/The-Harsh-Vardhan/ReasonSQL/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Harsh-Vardhan/ReasonSQL/actions)
 [![Next.js](https://img.shields.io/badge/Next.js-16-000000.svg)](https://nextjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com)
 [![LLM: Gemini](https://img.shields.io/badge/LLM-Gemini-purple.svg)](https://ai.google.dev/)
@@ -57,9 +58,13 @@
 - **OpenGraph Social Preview** — Branded card when sharing on LinkedIn/Twitter
 
 ### Backend (FastAPI)
+- **Async Pipeline** — Fully asynchronous with `asyncpg` for non-blocking database calls
+- **Redis Caching** — LLM response caching with automatic in-memory fallback
+- **Multi-turn Context** — Follow-up questions with pronoun resolution ("show me *their* albums")
+- **Vector Search (RAG)** — Semantic schema selection for large databases (15+ tables)
+- **CSV Upload** — `POST /upload` endpoint to ingest CSV files on-the-fly
 - **PostgreSQL + SQLite** — Supabase PostgreSQL in production, SQLite for local dev
-- **RESTful API** — `/query`, `/health`, `/databases/{id}/schema` endpoints
-- **Live Health Check** — Real-time database connection monitoring
+- **CI/CD Pipeline** — GitHub Actions for automated testing on push/PR
 - **Quota Management** — Gemini API key rotation and rate limiting
 
 ---
@@ -191,7 +196,10 @@ See [HOSTING.md](docs/HOSTING.md) for detailed instructions.
 | **Backend** | Python, FastAPI, Pydantic |
 | **LLM** | Google Gemini (with key rotation) |
 | **Database** | PostgreSQL (Supabase) / SQLite |
+| **Caching** | Redis (with in-memory fallback) |
+| **Embeddings** | sentence-transformers (all-MiniLM-L6-v2) |
 | **Hosting** | Vercel (frontend) + Render (backend) |
+| **CI/CD** | GitHub Actions |
 | **Analytics** | Vercel Analytics |
 
 ---
