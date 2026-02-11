@@ -551,6 +551,18 @@ function HomeInner() {
           {/* Query Suggestions */}
           {!loading && !response && (
             <div className="mb-8">
+              {/* Cold Start Notice */}
+              {queryHistory.length === 0 && (
+                <div className="mb-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-200 text-sm flex gap-3 items-start animate-fade-in">
+                  <span className="text-xl">💡</span>
+                  <div>
+                    <strong>First query may take ~30s to warm up.</strong>
+                    <p className="opacity-80 mt-1 leading-relaxed">
+                      The free backend spins down after inactivity. Please be patient with the first request — subsequent queries will be instant!
+                    </p>
+                  </div>
+                </div>
+              )}
               <QuerySuggestions onSelect={q => { setQuery(q); inputRef.current?.focus(); }} />
             </div>
           )}
