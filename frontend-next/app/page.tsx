@@ -7,6 +7,7 @@ import ReasoningCard from "./components/ReasoningCard";
 import SystemStatus from "./components/SystemStatus";
 import SchemaExplorer from "./components/SchemaExplorer";
 import QuerySuggestions from "./components/QuerySuggestions";
+import ResultsChart from "./components/ResultsChart";
 import { useToast } from "./components/Toast";
 
 // API Types
@@ -136,6 +137,7 @@ function HomeInner() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [showAbout, setShowAbout] = useState(false);
+  const [showVisuals, setShowVisuals] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { copied, copy } = useCopyFeedback();
@@ -654,11 +656,24 @@ function HomeInner() {
                       </div>
                     )}
 
+                    {/* Data Visualization */}
+                    {showVisuals && response.data_preview && response.data_preview.length > 0 && (
+                      <ResultsChart data={response.data_preview} />
+                    )}
+
                     {/* Data Preview + CSV export */}
                     {response.data_preview && response.data_preview.length > 0 && (
-                      <div>
+                      <div className="mt-8">
                         <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-lg font-semibold text-white">Data Preview</h3>
+                          <div className="flex items-center gap-4">
+                            <h3 className="text-lg font-semibold text-white">Data Preview</h3>
+                            <button
+                              onClick={() => setShowVisuals(!showVisuals)}
+                              className={`text-xs px-2 py-1 rounded-md border ${showVisuals ? "bg-cyan-500/20 border-cyan-500/30 text-cyan-300" : "bg-white/5 border-white/10 text-gray-400 hover:text-white"} transition-all`}
+                            >
+                              {showVisuals ? "Hide Chart" : "Show Chart"}
+                            </button>
+                          </div>
                           <button
                             onClick={() => { downloadCSV(response.data_preview!, "query_results.csv"); addToast("CSV downloaded!", "success"); }}
                             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-white/10">
