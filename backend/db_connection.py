@@ -410,99 +410,15 @@ def close_connections():
 # ASYNC CONNECTION MANAGEMENT
 # =============================================================================
 
-import asyncio
-from typing import Optional
-
-# Global async pool
-_async_pool = None
-
-async def get_async_pool():
-    """Get or create asyncpg connection pool."""
-    global _async_pool
-    
-    if _async_pool:
-        return _async_pool
-    
-    database_url = get_database_url()
-    if not database_url:
-        raise ValueError("DATABASE_URL environment variable not set")
-    
-    try:
-        import asyncpg
-        # Resolve IPv4 if needed
-        from urllib.parse import urlparse
-        parsed = urlparse(database_url)
-        
-        # IPv4 resolution logic (reused from sync)
-        final_url = database_url
-        if parsed.hostname and "pooler.supabase.com" not in parsed.hostname:
-             final_url = _inject_ipv4_into_url(database_url)
-
-        print(f"[DB] Creating asyncpg pool...")
-        _async_pool = await asyncpg.create_pool(
-            final_url,
-            min_size=1,
-            max_size=10,
-            command_timeout=60
-        )
-        return _async_pool
-    except ImportError:
-        raise ImportError("asyncpg not installed. Run: pip install asyncpg")
-    except Exception as e:
-        print(f"[DB] Async pool creation failed: {e}")
-        raise
-
-async def close_async_pool():
-    """Close async connection pool."""
-    global _async_pool
-    if _async_pool:
-        await _async_pool.close()
-        _async_pool = None
-
 async def execute_query_async(sql: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
     """
-    Execute SQL query asynchronously.
+    Execute SQL query asynchronously using thread pool.
     
-    - PostgreSQL: Uses asyncpg pool
-    - SQLite: Runs sync execute_query in thread pool (fallback)
+    Uses asyncio.to_thread to run the synchronous execute_query function
+    in a separate thread. This works for both SQLite and PostgreSQL (psycopg2)
+    and avoids the need for a separate asyncpg connection pool.
     """
-    db_type = get_db_type()
-    
-    if db_type == "sqlite":
-        # Fallback to sync execution in thread
-        return await asyncio.to_thread(execute_query, sql, params)
-    
-    # PostgreSQL Async
-    pool = await get_async_pool()
-    async with pool.acquire() as conn:
-        try:
-            # asyncpg uses $1, $2 syntax, but our SQL might use %s (psycopg2 style)
-            # Basic conversion: %s -> $n
-            # This is tricky if queries are complex. 
-            # Ideally, the generator should produce correct syntax.
-            # But for now, let's assume we handle parameter styles or try to convert.
-            
-            # Simple conversion for standard parameterized queries
-            if params:
-                # Convert %s to $1, $2...
-                # This is a naive regex replacement, but robust enough for most generated SQL
-                import re
-                param_count = 0
-                def replace_param(match):
-                    nonlocal param_count
-                    param_count += 1
-                    return f"${param_count}"
-                
-                async_sql = re.sub(r'%s', replace_param, sql)
-                rows = await conn.fetch(async_sql, *params)
-            else:
-                rows = await conn.fetch(sql)
-            
-            return [dict(row) for row in rows]
-        except Exception as e:
-            # Log error and re-raise
-            print(f"[DB] Async execution failed: {e}")
-            raise
+    return await asyncio.to_thread(execute_query, sql, params)
 
 
 async def execute_write_async(sql: str, params: Optional[tuple] = None) -> None:
