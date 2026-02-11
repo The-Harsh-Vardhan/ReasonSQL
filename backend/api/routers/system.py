@@ -1,11 +1,3 @@
-"""
-System router — health check and debug endpoints.
-
-Endpoints:
-- GET /health    — Health check (always available)
-- GET /debug-db  — Live DB debug (gated behind ENABLE_DEBUG_ENDPOINTS)
-"""
-
 import os
 import time
 from urllib.parse import urlparse, unquote
@@ -21,6 +13,8 @@ from ..deps import database_registry, logger, ENABLE_DEBUG_ENDPOINTS
 
 router = APIRouter(tags=["System"])
 
+# Cache health check result for 30s to avoid connection spam
+_health_cache = {"result": None, "expires": 0}
 
 # =============================================================================
 # ENDPOINTS
@@ -29,6 +23,12 @@ router = APIRouter(tags=["System"])
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
     """Check API health and configuration status."""
+    now = time.time()
+    
+    # Use cached result if still valid (30s TTL)
+    if _health_cache["result"] and now < _health_cache["expires"]:
+        return _health_cache["result"]
+    
     # Get live database info
     db_info = test_connection()
     db_connected = db_info.get("connected", False)
@@ -42,7 +42,7 @@ async def health_check():
     else:
         db_name = db_info.get("connection_info", "SQLite (local)")
 
-    return HealthResponse(
+    response = HealthResponse(
         status="healthy",
         version="1.0.0",
         llm_provider=LLM_PROVIDER,
@@ -53,6 +53,12 @@ async def health_check():
         table_count=table_count,
         tables=tables,
     )
+    
+    # Cache for 30 seconds
+    _health_cache["result"] = response
+    _health_cache["expires"] = now + 30
+    
+    return response
 
 
 @router.get("/debug-db")
