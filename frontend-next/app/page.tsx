@@ -443,9 +443,17 @@ function HomeInner() {
               </svg>
               <span className="font-bold uppercase tracking-widest">Dataset: Chinook</span>
             </div>
-            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm">Quota-Optimized</span>
-            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm">Safety-Validated</span>
-            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm">Self-Correcting</span>
+            <a
+              href="https://reason-sql.vercel.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm hover:bg-cyan-500/20 transition-all flex items-center gap-2"
+            >
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+              Live at: reason-sql.vercel.app
+            </a>
+            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">Quota-Optimized</span>
+            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">Safety-Validated</span>
           </div>
 
           {/* About / Architecture Toggle */}

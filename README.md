@@ -137,34 +137,28 @@ npm install && npm run dev
 
 ## 📁 Project Structure
 
-```
 ReasonSQL/
-├── backend/                    # Core Logic
-│   ├── api/                    # FastAPI endpoints (main.py, schemas.py)
-│   ├── agents/                 # 12 agent definitions
-│   ├── orchestrator/           # Batch-optimized orchestration
-│   ├── adapters/               # Database adapters (SQLite, PostgreSQL)
-│   ├── tools/                  # Database tools
-│   ├── models/                 # Pydantic models
-│   └── db_connection.py        # Centralized DB connection module
-├── frontend-next/              # Next.js Frontend
-│   └── app/
-│       ├── page.tsx            # Main query interface
-│       ├── dashboard/page.tsx  # Analytics dashboard
-│       ├── components/         # UI components
-│       │   ├── SystemStatus.tsx
-│       │   ├── SchemaExplorer.tsx
-│       │   ├── QuerySuggestions.tsx
-│       │   ├── Toast.tsx
-│       │   ├── ReasoningCard.tsx
-│       │   └── ProcessingDiagram.tsx
-│       ├── opengraph-image.tsx # Dynamic OG image
-│       ├── icon.svg            # Custom favicon
-│       └── globals.css         # Design system & animations
-├── data/
-│   └── chinook.db              # Sample database (11 tables)
-└── configs/                    # Configuration files
+├── backend/                    # Core modular API (FastAPI)
+│   ├── api/                    # Routers, deps, schemas
+│   ├── agents/                 # 12 specialized agent definitions
+│   ├── orchestrator/           # Multi-agent logic
+│   └── adapters/               # DB Adapters (SQLite/Postgres)
+├── frontend-next/              # Next.js 16 Dashboard
+├── tests/                      # API and Integration tests
+├── data/                       # Sample datasets (Chinook)
+├── configs/                    # Environment & provider configs
+├── docs/                       # Hosting & usage guides
+└── Extras/                     # Legacy code and documentation
 ```
+
+---
+
+## 📖 How to Use
+
+1. **Ask a Question**: Type any natural language question about the database (e.g., *"Who are the top 10 customers by spend?"*).
+2. **Observe the Reasoning**: Click the **"Reasoning"** tab to see how the 12 agents analyzed your intent, explored the schema, and validated the SQL.
+3. **Review Results**: View the generated SQL and the live data preview in the **"Result"** tab.
+4. **Export & Share**: Download results as CSV or share the specific query URL with your team.
 
 ---
 
@@ -176,16 +170,14 @@ ReasonSQL/
 | **[Render](https://render.com)** | FastAPI Backend | ✅ 750 hrs/mo | [Active](https://reasonsql-api-rl3g.onrender.com/health) |
 | **Supabase** | PostgreSQL DB | ✅ 500MB | Connected |
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
+See [HOSTING.md](docs/HOSTING.md) for detailed instructions.
 
 ---
 
 ## 📖 Documentation
 
-- [Agent Pipeline](AGENT_PIPELINE.md) — Complete 12-agent workflow visualization
-- [Deployment Guide](DEPLOYMENT.md) — Vercel, Render, Docker setup
-- [Batch Orchestrator Design](docs/BATCH_ORCHESTRATOR_DESIGN.md) — Technical architecture
-- [Quota Optimization](docs/QUOTA_OPTIMIZATION.md) — Rate limit handling
+- [Hosting Guide](docs/HOSTING.md) — Step-by-step Supabase, Render, Vercel setup
+- [Agent Pipeline](Extras/AGENT_PIPELINE.md) — Complete 12-agent workflow (Legacy)
 - [Contributing Guide](CONTRIBUTING.md) — How to contribute
 
 ---
