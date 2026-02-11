@@ -88,6 +88,7 @@ from backend.models.agent_outputs import (
     ResponseSynthesizerOutput
 )
 from backend.models import FinalResponse, ExecutionStatus, ReasoningTrace, AgentAction
+from .json_utils import safe_parse_llm_json, JSONExtractionError
 
 
 

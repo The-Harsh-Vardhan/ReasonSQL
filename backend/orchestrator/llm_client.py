@@ -267,7 +267,7 @@ class GroqClient(LLMClient):
     def __init__(self, model: str = "groq/llama-3.1-8b-instant", verbose: bool = VERBOSE):
         # CRITICAL: Hard fail on 70B models
         if model not in self.ALLOWED_MODELS:
-            raise ConfigurationError(
+            raise ValueError(
                 f"🛑 FORBIDDEN: Groq model '{model}' is not allowed!\n"
                 f"   Only 8B models permitted: {self.ALLOWED_MODELS}\n"
                 f"   70B models exhaust TPD quota and crash demos.\n"
@@ -410,7 +410,7 @@ class MultiProviderLLM:
         tertiary: Optional[str] = None,  # DISABLED by default (controlled by feature flag)
         gemini_model: str = "gemini/gemini-2.0-flash",
         groq_model: str = "groq/llama-3.1-8b-instant",
-
+        qwen_model: str = "qwen/qwen-2.5-72b-instruct",
         verbose: bool = VERBOSE
     ):
         self.verbose = verbose
