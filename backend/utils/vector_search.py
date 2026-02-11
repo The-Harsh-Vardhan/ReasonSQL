@@ -1,5 +1,8 @@
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None  # Graceful fallback when numpy not installed
 import logging
 from typing import List, Dict, Any
 
