@@ -27,3 +27,4 @@ httpx>=0.26.0
 
 # PostgreSQL support (for Supabase/cloud deployments)
 psycopg2-binary>=2.9.0
+asyncpg>=0.29.0

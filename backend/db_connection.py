@@ -509,43 +509,18 @@ async def execute_write_async(sql: str, params: Optional[tuple] = None) -> None:
     """
     Execute a write SQL statement asynchronously (CREATE, INSERT, UPDATE, DELETE).
     
-    Unlike execute_query_async, this does NOT expect rows back.
-    
-    - PostgreSQL: Uses asyncpg pool with conn.execute()
-    - SQLite: Runs sync execute_query in thread pool (which handles non-SELECT)
+    Uses the sync psycopg2/sqlite3 connection (via get_connection_context)
+    wrapped in asyncio.to_thread. This avoids asyncpg pool issues with
+    Supabase pooler connections.
     """
-    db_type = get_db_type()
-    
-    if db_type == "sqlite":
-        # Must use connection directly to commit writes
-        def _write_sqlite(sql, params):
-            from backend.db_connection import get_connection_context
-            with get_connection_context() as conn:
-                cursor = conn.cursor()
-                if params:
-                    cursor.execute(sql, params)
-                else:
-                    cursor.execute(sql)
-                conn.commit()
-        await asyncio.to_thread(_write_sqlite, sql, params)
-        return
-    
-    # PostgreSQL Async
-    pool = await get_async_pool()
-    async with pool.acquire() as conn:
-        try:
+    def _sync_write():
+        with get_connection_context() as conn:
+            cursor = conn.cursor()
             if params:
-                import re
-                param_count = 0
-                def replace_param(match):
-                    nonlocal param_count
-                    param_count += 1
-                    return f"${param_count}"
-                
-                async_sql = re.sub(r'%s', replace_param, sql)
-                await conn.execute(async_sql, *params)
+                cursor.execute(sql, params)
             else:
-                await conn.execute(sql)
-        except Exception as e:
-            print(f"[DB] Async write failed: {e}")
-            raise
+                cursor.execute(sql)
+            conn.commit()
+    
+    await asyncio.to_thread(_sync_write)
+

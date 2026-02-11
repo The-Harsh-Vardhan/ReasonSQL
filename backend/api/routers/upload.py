@@ -75,7 +75,7 @@ async def upload_csv(file: UploadFile = File(...)):
         if db_type == "sqlite":
             placeholders = ", ".join(["?"] * n_cols)
         else:
-            placeholders = ", ".join([f"${i+1}" for i in range(n_cols)])
+            placeholders = ", ".join(["%s"] * n_cols)
         
         insert_sql = f"INSERT INTO {table_name} ({cols_str}) VALUES ({placeholders})"
         
