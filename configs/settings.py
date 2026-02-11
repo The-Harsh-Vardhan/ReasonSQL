@@ -10,7 +10,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
-from crewai import LLM
+try:
+    from crewai import LLM
+except ImportError:
+    LLM = None
 
 # Load environment variables from .env file
 # interpolate=False prevents $VAR expansion in values (important for passwords with $ characters)
@@ -210,6 +213,8 @@ def get_llm(validate: bool = True) -> LLM:
         api_key = os.getenv("GROQ_API_KEY") if LLM_PROVIDER == "groq" else os.getenv("GOOGLE_API_KEY")
     
     if LLM_PROVIDER == "groq":
+        if LLM is None:
+            raise ConfigurationError("CrewAI not installed! Cannot use Groq provider.")
         return LLM(
             model=LLM_MODEL,
             temperature=0.1,  # Low temperature for consistent SQL generation
@@ -219,6 +224,14 @@ def get_llm(validate: bool = True) -> LLM:
         # For Gemini, CrewAI's LiteLLM reads from GEMINI_API_KEY env var
         if not os.getenv("GEMINI_API_KEY"):
             os.environ["GEMINI_API_KEY"] = api_key
+            
+        if LLM is None:
+             # Fallback: if CrewAI is missing, we can't return an LLM object
+             # But BatchOptimizedOrchestrator doesn't Use this get_llm function!
+             # It uses LLMClient directly.
+             # This function is only for legacy agents.
+             raise ConfigurationError("CrewAI not installed! Legacy agents cannot run.")
+             
         return LLM(
             model=LLM_MODEL,  # Should be gemini/gemini-2.5-flash format
             temperature=0.1
