@@ -8,6 +8,7 @@ import SystemStatus from "./components/SystemStatus";
 import SchemaExplorer from "./components/SchemaExplorer";
 import QuerySuggestions from "./components/QuerySuggestions";
 import ResultsChart from "./components/ResultsChart";
+import CsvUploadModal from "./components/CsvUploadModal";
 import { useToast } from "./components/Toast";
 
 // API Types
@@ -138,6 +139,7 @@ function HomeInner() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [showAbout, setShowAbout] = useState(false);
   const [showVisuals, setShowVisuals] = useState(true);
+  const [showUpload, setShowUpload] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { copied, copy } = useCopyFeedback();
@@ -465,6 +467,16 @@ function HomeInner() {
             </a>
             <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">Quota-Optimized</span>
             <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">Safety-Validated</span>
+            <button
+              onClick={() => setShowUpload(true)}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/30 backdrop-blur-sm hover:bg-violet-500/25 hover:border-violet-400/50 hover:scale-105 transition-all duration-300 cursor-pointer"
+              title="Upload CSV file"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              <span className="font-bold uppercase tracking-widest text-xs">Upload CSV</span>
+            </button>
           </div>
 
           {/* About / Architecture Toggle */}
@@ -775,6 +787,9 @@ function HomeInner() {
           </div>
         </footer>
       </div>
+
+      {/* CSV Upload Modal */}
+      <CsvUploadModal open={showUpload} onClose={() => setShowUpload(false)} apiBase={API_BASE} />
     </div>
   );
 }
