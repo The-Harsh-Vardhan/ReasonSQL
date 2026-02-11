@@ -503,3 +503,40 @@ async def execute_query_async(sql: str, params: Optional[tuple] = None) -> List[
             # Log error and re-raise
             print(f"[DB] Async execution failed: {e}")
             raise
+
+
+async def execute_write_async(sql: str, params: Optional[tuple] = None) -> None:
+    """
+    Execute a write SQL statement asynchronously (CREATE, INSERT, UPDATE, DELETE).
+    
+    Unlike execute_query_async, this does NOT expect rows back.
+    
+    - PostgreSQL: Uses asyncpg pool with conn.execute()
+    - SQLite: Runs sync execute_query in thread pool (which handles non-SELECT)
+    """
+    db_type = get_db_type()
+    
+    if db_type == "sqlite":
+        # Sync fallback — execute_query handles cursor.description is None
+        await asyncio.to_thread(execute_query, sql, params)
+        return
+    
+    # PostgreSQL Async
+    pool = await get_async_pool()
+    async with pool.acquire() as conn:
+        try:
+            if params:
+                import re
+                param_count = 0
+                def replace_param(match):
+                    nonlocal param_count
+                    param_count += 1
+                    return f"${param_count}"
+                
+                async_sql = re.sub(r'%s', replace_param, sql)
+                await conn.execute(async_sql, *params)
+            else:
+                await conn.execute(sql)
+        except Exception as e:
+            print(f"[DB] Async write failed: {e}")
+            raise
