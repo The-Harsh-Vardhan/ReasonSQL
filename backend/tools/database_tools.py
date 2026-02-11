@@ -7,7 +7,13 @@ import time
 import re
 from typing import Any, Type, List, Dict, Optional
 from pydantic import BaseModel, Field
-from crewai.tools import BaseTool
+try:
+    from crewai.tools import BaseTool
+except ImportError:
+    # Dummy BaseTool for environments without CrewAI (like Render free tier)
+    class BaseTool(BaseModel):
+        """Dummy BaseTool."""
+        pass
 
 from backend.models import (
     ColumnInfo, TableInfo, ForeignKeyRelation, SchemaContext,
