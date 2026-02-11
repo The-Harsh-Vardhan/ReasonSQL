@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Use importlib to avoid ImportPathMismatchError caused by root __init__.py
+import_mode = "importlib"

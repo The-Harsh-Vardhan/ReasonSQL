@@ -33,7 +33,7 @@ class ExecutionStatusAPI(str, Enum):
 
 class QueryRequest(BaseModel):
     """Request body for POST /query."""
-    query: str = Field(..., description="Natural language query", min_length=1)
+    query: str = Field(..., description="Natural language query", min_length=1, max_length=2000)
     database_id: Optional[str] = Field(
         default="default", 
         description="Database identifier (default uses configured SQLite)"
