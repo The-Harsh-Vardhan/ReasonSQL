@@ -339,16 +339,16 @@ class BatchOptimizedOrchestrator:
         self._log(f"{'='*60}")
         
         try:
+            # Deterministic: Schema Exploration
+            self._log("→ SchemaExplorer [Deterministic]")
+            state = await self._deterministic_schema_exploration(state)
+            
             # BATCH 1: Reasoning & Planning (Intent, Clarify, Decompose, Plan)
             self._log("→ BATCH 1: Reasoning & Planning [LLM]")
             state = await self._batch_1_reasoning_and_planning(state)
             
             if state.intent == "AMBIGUOUS" and not state.resolved_query:
                 return self._abort(state, "Unresolved ambiguity")
-            
-            # Deterministic: Schema Exploration
-            self._log("→ SchemaExplorer [Deterministic]")
-            state = await self._deterministic_schema_exploration(state)
             
             # Meta-Query Handling
             if state.intent == "META_QUERY":
