@@ -46,9 +46,12 @@ services:
       # ===========================================
       # Database & System Settings
       # ===========================================
-      # PostgreSQL/Supabase connection (recommended for production)
+      # PostgreSQL/Supabase connection (production)
+      # Project: reasonsql-prod | Region: ap-southeast-1 (Singapore)
+      # Set in Render Dashboard → Environment Variables:
+      #   DATABASE_URL = postgresql://postgres.cycbtnettmqkoszqepld:<PASSWORD>@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres
       - key: DATABASE_URL
-        sync: false  # Set via Render dashboard (e.g., postgresql://user:pass@db.xxx.supabase.co:5432/postgres)
+        sync: false
       # SQLite fallback for local development (ignored if DATABASE_URL is set)
       - key: DATABASE_PATH
         value: ./data/chinook.db
@@ -73,6 +76,6 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.7"
       - key: ALLOWED_ORIGINS
-        value: "*"  # Update with your Vercel domain after deployment
+        value: "https://reason-sql.vercel.app,https://reasonsql.vercel.app"  # Vercel production domains
     
     healthCheckPath: /health
