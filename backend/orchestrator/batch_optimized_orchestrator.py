@@ -779,15 +779,17 @@ Return JSON in this EXACT format:
                         WHERE table_schema = 'public' AND table_name = %s
                         ORDER BY ordinal_position
                     """, (table,))
-                    col_str = ", ".join([f"{c['column_name']} {c['data_type']}" for c in cols])
+                    # Double-quote column names so LLM copies exact PostgreSQL quoting syntax
+                    col_str = ", ".join([f'"{ c["column_name"] }" {c["data_type"]}' for c in cols])
                 
-                schema_str = f"{table}({col_str})"
+                # Double-quote table name for PostgreSQL schema context
+                if db_type == "postgresql":
+                    schema_str = f'"{table}"({col_str})'
+                else:
+                    schema_str = f"{table}({col_str})"
                 all_schema_parts[table] = schema_str
                 
-                # Add to vector store (idempotent-ish check inside not needed as add_table overwrites/updates)
-                # But to avoid re-embedding every query in a real app, we might check keys.
-                # For now, we'll blindly add to ensure it's up to date.
-                # In production, this should be done at startup or background.
+                # Add to vector store
                 if table not in schema_vector_store.table_embeddings:
                      schema_vector_store.add_table(table, schema_str)
 
@@ -962,7 +964,24 @@ Return JSON in this EXACT format:
     
     async def _batch_2_sql_generation(self, state: BatchPipelineState) -> BatchPipelineState:
         """Single LLM call for SQLGenerator agent."""
-        prompt = f"""You are SQLGenerator agent. Generate valid SQLite SQL for this query.
+        db_type = get_db_type()  # "sqlite" or "postgresql"
+        
+        if db_type == "postgresql":
+            dialect_rules = """DATABASE TYPE: PostgreSQL (Supabase)
+CRITICAL QUOTING RULES FOR POSTGRESQL:
+- ALL table names MUST be double-quoted: \"Artist\", \"Album\", \"Track\", \"Customer\", etc.
+- ALL column names MUST be double-quoted: \"ArtistId\", \"Name\", \"Title\", \"AlbumId\", etc.
+- Example: SELECT \"Artist\".\"Name\" FROM \"Artist\" INNER JOIN \"Album\" ON \"Artist\".\"ArtistId\" = \"Album\".\"ArtistId\"
+- NEVER write unquoted: Artist, ArtistId (will fail with 'relation does not exist')
+- Use PostgreSQL syntax: string concat ||, ILIKE for case-insensitive search"""
+        else:
+            dialect_rules = """DATABASE TYPE: SQLite
+- No quoting required for table/column names
+- Use SQLite syntax: || for string concat, LIKE for search"""
+
+        prompt = f"""You are SQLGenerator agent. Generate valid SQL for this query.
+
+{dialect_rules}
 
 USER QUERY: {state.resolved_query}
 QUERY PLAN: {state.query_plan}
@@ -1004,6 +1023,7 @@ Return JSON:
     
     async def _batch_3_self_correction(self, state: BatchPipelineState) -> BatchPipelineState:
         """Single LLM call for SelfCorrectionAgent (handles execution errors AND FK violations)."""
+        db_type = get_db_type()
         
         # Determine if this is a FK violation or execution error
         if state.fk_violations:
@@ -1015,8 +1035,16 @@ Return JSON:
         else:
             error_context = f"EXECUTION ERROR: {state.execution_error}"
             failed_sql = state.generated_sql
+
+        if db_type == "postgresql":
+            dialect_note = """DATABASE TYPE: PostgreSQL — ALL table and column names MUST be double-quoted.
+Example: SELECT \"Artist\".\"Name\" FROM \"Artist\" — never write unquoted Artist or ArtistId."""
+        else:
+            dialect_note = "DATABASE TYPE: SQLite — no quoting required."
         
         prompt = f"""You are SelfCorrectionAgent. The SQL query has issues. Analyze and fix it.
+
+{dialect_note}
 
 ORIGINAL QUERY: {state.resolved_query}
 FAILED SQL: {failed_sql}
@@ -1034,6 +1062,10 @@ CRITICAL: If the error mentions FK (foreign key) violations:
 - Example: If joining Artist to Track, you need intermediate table Album:
   WRONG: Artist.ArtistId = Track.AlbumId (violates FK)
   RIGHT: Artist JOIN Album ON Artist.ArtistId = Album.ArtistId JOIN Track ON Album.AlbumId = Track.AlbumId
+
+If the error mentions 'relation does not exist' (PostgreSQL):
+- You forgot to double-quote the table/column names
+- Fix by wrapping ALL identifiers in double quotes: \"TableName\".\"ColumnName\"
 
 If the error mentions SAFETY violations:
 - Missing LIMIT: Add "LIMIT {DEFAULT_LIMIT}" at the end
