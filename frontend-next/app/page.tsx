@@ -65,7 +65,7 @@ const HISTORY_KEY = "reasonsql_history";
 const BOOKMARKS_KEY = "reasonsql_bookmarks";
 const STATS_KEY = "reasonsql_stats";
 
-interface HistoryEntry { query: string; success: boolean; time: number; timestamp: number; }
+interface HistoryEntry { query: string; answer: string; sql_used?: string; success: boolean; time: number; timestamp: number; }
 interface BookmarkEntry { query: string; label: string; timestamp: number; }
 interface StatsData { totalQueries: number; successCount: number; totalTimeMs: number; queriesPerDay: Record<string, number>; }
 
@@ -134,6 +134,7 @@ function HomeInner() {
   const [demoIndex, setDemoIndex] = useState(0);
   const [simpleMode, setSimpleMode] = useState(false);
   const [queryHistory, setQueryHistory] = useState<HistoryEntry[]>([]);
+  const [conversationHistory, setConversationHistory] = useState<HistoryEntry[]>([]); // Active conversation context
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -193,11 +194,17 @@ function HomeInner() {
 
     const startTime = Date.now();
 
-    // Prepare history (last 5 messages)
-    const history = queryHistory.slice(-5).map(entry => [
+    // Prepare history from active conversation context (last 5 turns)
+    // Uses real answers so the LLM can resolve follow-ups like "what about their invoices?"
+    const history = conversationHistory.slice(-5).flatMap(entry => [
       { role: "user", content: entry.query },
-      { role: "assistant", content: entry.success ? "Result returned successfully." : "Error occurred." } // Simplified for now
-    ]).flat();
+      {
+        role: "assistant",
+        content: entry.success
+          ? `${entry.answer}${entry.sql_used ? ` (SQL: ${entry.sql_used})` : ""}`
+          : `Error: ${entry.answer}`
+      },
+    ]);
 
     try {
       const res = await fetch(buildApiUrl("query"), {
@@ -236,8 +243,17 @@ function HomeInner() {
       setResponse(normalizedData);
 
       const timeMs = normalizedData.reasoning_trace?.total_time_ms || Date.now() - startTime;
-      const newEntry: HistoryEntry = { query: query.trim(), success: normalizedData.success, time: timeMs, timestamp: Date.now() };
+      const newEntry: HistoryEntry = {
+        query: query.trim(),
+        answer: normalizedData.answer || "",
+        sql_used: normalizedData.sql_used || undefined,
+        success: normalizedData.success,
+        time: timeMs,
+        timestamp: Date.now(),
+      };
       setQueryHistory(prev => { const u = [...prev, newEntry].slice(-20); saveJSON(HISTORY_KEY, u); return u; });
+      // Append to active conversation context
+      setConversationHistory(prev => [...prev, newEntry].slice(-10));
 
       trackQuery(normalizedData.success, timeMs);
       addToast(normalizedData.success ? "Query completed" : "Query returned an error", normalizedData.success ? "success" : "error");
@@ -535,6 +551,30 @@ function HomeInner() {
         )}
 
         <main className="flex-1 px-4 lg:px-8 pb-8">
+          {/* Conversation Context Banner */}
+          {conversationHistory.length > 0 && (
+            <div className="mb-3 px-4 py-2.5 rounded-xl bg-gradient-to-r from-violet-500/10 to-cyan-500/10 border border-violet-500/20 backdrop-blur-sm flex items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="text-violet-400 shrink-0" title="Conversation context active">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </span>
+                <span className="text-xs text-violet-300 font-medium shrink-0">Context ({conversationHistory.length} turn{conversationHistory.length !== 1 ? "s" : ""}):</span>
+                <span className="text-xs text-gray-400 truncate">
+                  {conversationHistory[conversationHistory.length - 1].query}
+                </span>
+              </div>
+              <button
+                onClick={() => setConversationHistory([])}
+                className="shrink-0 text-xs text-gray-500 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-red-500/10"
+                title="Clear conversation context"
+              >
+                ✕ Clear
+              </button>
+            </div>
+          )}
+
           {/* Query Input */}
           <form onSubmit={handleSubmit} className="mb-4">
             <div className="flex gap-3">
@@ -544,7 +584,9 @@ function HomeInner() {
                   type="text"
                   value={query}
                   onChange={e => setQuery(e.target.value)}
-                  placeholder="Ask anything about your database... (Ctrl+Enter)"
+                  placeholder={conversationHistory.length > 0
+                    ? "Ask a follow-up... (Ctrl+Enter)"
+                    : "Ask anything about your database... (Ctrl+Enter)"}
                   className="w-full px-6 py-4 pr-12 rounded-xl glass-card text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 text-lg input-glow transition-all"
                   disabled={loading}
                 />
@@ -566,7 +608,7 @@ function HomeInner() {
                     <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                     <span className="timer-pulse">{(elapsedMs / 1000).toFixed(1)}s</span>
                   </span>
-                ) : "Run"}
+                ) : conversationHistory.length > 0 ? "Follow-up" : "Run"}
               </button>
             </div>
           </form>
