@@ -1,343 +1,296 @@
 """
-Centralized Database Connection Module.
+Database Connection Module — ReasonSQL 2.0
 
-Provides a unified interface for connecting to SQLite or PostgreSQL databases.
-Auto-detects database type based on environment variables:
-- DATABASE_URL (PostgreSQL/Supabase) - takes priority
-- DATABASE_PATH (SQLite) - fallback for local development
+Uses SQLAlchemy for all database operations (PostgreSQL only).
+
+Architecture:
+- Synchronous: SQLAlchemy `create_engine` + `sessionmaker` (psycopg2 driver)
+- Asynchronous: SQLAlchemy `create_async_engine` + `AsyncSession` (asyncpg driver)
+- Connection pooling: SQLAlchemy QueuePool (configurable via env)
+- Schema introspection: `sqlalchemy.inspect` (no raw PRAGMA / information_schema)
 
 Usage:
-    from backend.db_connection import get_connection, execute_query, get_db_type
-    
-    # Execute a query (works with both SQLite and PostgreSQL)
-    results = execute_query("SELECT * FROM users LIMIT 10")
-    
-    # Get raw connection if needed
-    conn = get_connection()
+    from backend.db_connection import execute_query, get_tables, get_session
+
+    # Simple query
+    results = execute_query("SELECT COUNT(*) as count FROM \"Customer\"")
+
+    # Session-based (for transactions)
+    with get_session() as session:
+        result = session.execute(text("SELECT 1"))
 """
 
 import os
-import sqlite3
-from typing import List, Dict, Any, Optional, Union
-from pathlib import Path
+import logging
+from typing import List, Dict, Any, Optional, Generator
 from contextlib import contextmanager
 
-# Lazy import psycopg2 (only when PostgreSQL is used)
-psycopg2 = None
+from sqlalchemy import create_engine, text, inspect as sa_inspect, event
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import QueuePool
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
+from configs import DATABASE_URL, DB_POOL_SIZE, DB_MAX_OVERFLOW
 
-def _import_psycopg2():
-    """Lazy import psycopg2 to avoid ImportError when not using PostgreSQL."""
-    global psycopg2
-    if psycopg2 is None:
-        try:
-            import psycopg2 as pg
-            from psycopg2.extras import RealDictCursor
-            psycopg2 = pg
-        except ImportError:
-            raise ImportError(
-                "psycopg2 not installed. Run: pip install psycopg2-binary\n"
-                "This is required for PostgreSQL/Supabase connections."
-            )
-    return psycopg2
+logger = logging.getLogger("reasonsql.db")
 
 
 # =============================================================================
-# DATABASE TYPE DETECTION
+# ENGINE CREATION
 # =============================================================================
 
-def get_db_type() -> str:
-    """
-    Detect database type from environment variables.
-    
-    Returns:
-        'postgresql' if DATABASE_URL is set, 'sqlite' otherwise
-    """
-    database_url = os.getenv("DATABASE_URL", "").strip()
-    if database_url and (database_url.startswith("postgres") or database_url.startswith("postgresql")):
-        return "postgresql"
-    return "sqlite"
+def _build_sync_url(url: str) -> str:
+    """Convert any postgres:// or postgresql+asyncpg:// URL to psycopg2 sync URL."""
+    url = url.replace("postgresql+asyncpg://", "postgresql://")
+    url = url.replace("postgres://", "postgresql://")
+    return url
 
 
-def get_database_url() -> Optional[str]:
-    """Get PostgreSQL connection URL if configured."""
-    return os.getenv("DATABASE_URL", "").strip() or None
+def _build_async_url(url: str) -> str:
+    """Convert URL to asyncpg-compatible URL."""
+    url = url.replace("postgresql://", "postgresql+asyncpg://")
+    url = url.replace("postgres://", "postgresql+asyncpg://")
+    # Ensure it's not doubled
+    url = url.replace("postgresql+asyncpg+asyncpg://", "postgresql+asyncpg://")
+    return url
 
 
-def get_database_path() -> str:
-    """Get SQLite database path."""
-    from configs import DATABASE_PATH
-    return DATABASE_PATH
+# Synchronous engine (used for schema introspection + sync helpers)
+_sync_engine = create_engine(
+    _build_sync_url(DATABASE_URL),
+    poolclass=QueuePool,
+    pool_size=DB_POOL_SIZE,
+    max_overflow=DB_MAX_OVERFLOW,
+    pool_pre_ping=True,          # Verify connections before use
+    pool_recycle=3600,           # Recycle connections every hour
+    echo=False,
+)
+
+# Session factory (synchronous)
+SessionLocal = sessionmaker(bind=_sync_engine, autocommit=False, autoflush=False)
+
+# Asynchronous engine (used in the async FastAPI pipeline)
+_async_engine = create_async_engine(
+    _build_async_url(DATABASE_URL),
+    pool_size=DB_POOL_SIZE,
+    max_overflow=DB_MAX_OVERFLOW,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+    echo=False,
+)
+
+# Async session factory
+AsyncSessionLocal = async_sessionmaker(
+    bind=_async_engine,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+)
 
 
 # =============================================================================
-# CONNECTION MANAGEMENT
+# SESSION CONTEXT MANAGERS
 # =============================================================================
-
-_pg_connection = None  # Reusable PostgreSQL connection
-
-
-def get_connection() -> Union[sqlite3.Connection, Any]:
-    """
-    Get a database connection based on environment configuration.
-    
-    For SQLite: Returns a new connection each time (lightweight).
-    For PostgreSQL: Returns a reusable connection (connection pooling recommended for production).
-    
-    Returns:
-        Database connection object
-    """
-    db_type = get_db_type()
-    
-    if db_type == "postgresql":
-        return _get_postgres_connection()
-    else:
-        return _get_sqlite_connection()
-
-
-def _get_sqlite_connection() -> sqlite3.Connection:
-    """Create SQLite connection with row factory."""
-    db_path = get_database_path()
-    
-    if not Path(db_path).exists():
-        raise FileNotFoundError(f"SQLite database not found: {db_path}")
-    
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def _resolve_ipv4(hostname: str) -> str:
-    """Resolve hostname to IPv4 address (Render can't reach some IPv6 addresses)."""
-    import socket
-    try:
-        # Force AF_INET (IPv4) resolution
-        results = socket.getaddrinfo(hostname, None, socket.AF_INET)
-        if results:
-            ipv4 = results[0][4][0]
-            print(f"[DB] Resolved {hostname} → {ipv4} (IPv4)")
-            return ipv4
-    except socket.gaierror:
-        pass
-    return hostname  # Fallback to original
-
-
-def _inject_ipv4_into_url(database_url: str) -> str:
-    """Replace hostname with IPv4 address in DATABASE_URL to avoid IPv6 issues.
-    
-    ONLY applies to direct Supabase connections (db.*.supabase.co).
-    Pooler connections (*.pooler.supabase.com) already resolve to IPv4
-    and MUST keep the original hostname for TLS SNI routing.
-    """
-    from urllib.parse import urlparse, urlunparse
-    try:
-        parsed = urlparse(database_url)
-        hostname = parsed.hostname
-        
-        # Skip pooler URLs — they need the hostname for SNI-based tenant routing
-        if hostname and "pooler.supabase.com" in hostname:
-            print(f"[DB] Pooler URL detected ({hostname}), keeping original hostname for SNI")
-            return database_url
-        
-        if hostname and not hostname.replace('.', '').isdigit():
-            ipv4 = _resolve_ipv4(hostname)
-            if ipv4 != hostname:
-                # Replace hostname with IP, preserve port
-                new_netloc = parsed.netloc.replace(hostname, ipv4)
-                new_url = urlunparse(parsed._replace(netloc=new_netloc))
-                return new_url
-    except Exception as e:
-        print(f"[DB] IPv4 resolution failed, using original URL: {e}")
-    return database_url
-
-
-def _get_postgres_connection():
-    """Get or create PostgreSQL connection."""
-    global _pg_connection
-    
-    _import_psycopg2()
-    from psycopg2.extras import RealDictCursor
-    from urllib.parse import urlparse, unquote
-    
-    database_url = get_database_url()
-    if not database_url:
-        raise ValueError("DATABASE_URL environment variable not set")
-    
-    # Check if existing connection is still valid (BEFORE logging)
-    if _pg_connection is not None:
-        try:
-            _pg_connection.cursor().execute("SELECT 1")
-            return _pg_connection
-        except Exception:
-            # Connection died, recreate
-            try:
-                _pg_connection.close()
-            except Exception:
-                pass
-            _pg_connection = None
-    
-    # Only log when actually creating a NEW connection
-    parsed = urlparse(database_url)
-    masked_pw = (parsed.password or "")[:3] + "***" if parsed.password else "NONE"
-    print(f"[DB] Connecting: user={parsed.username}, host={parsed.hostname}, port={parsed.port}, password={masked_pw}")
-    
-    # For pooler URLs, connect using individual parameters to preserve hostname for SNI
-    # and avoid any URL encoding/shell expansion issues with passwords
-    if parsed.hostname and "pooler.supabase.com" in parsed.hostname:
-        print(f"[DB] Using pooler connection (SNI hostname: {parsed.hostname})")
-        _pg_connection = psycopg2.connect(
-            host=parsed.hostname,
-            port=parsed.port or 6543,
-            user=parsed.username,
-            password=unquote(parsed.password) if parsed.password else None,
-            dbname=parsed.path.lstrip('/') or 'postgres',
-            sslmode='require',
-            cursor_factory=RealDictCursor
-        )
-    else:
-        # For direct connections, apply IPv4 resolution
-        resolved_url = _inject_ipv4_into_url(database_url)
-        _pg_connection = psycopg2.connect(
-            resolved_url,
-            cursor_factory=RealDictCursor
-        )
-    
-    _pg_connection.autocommit = True  # For read-only operations
-    return _pg_connection
-
 
 @contextmanager
-def get_connection_context():
+def get_session() -> Generator[Session, None, None]:
     """
-    Context manager for database connections.
-    
-    For SQLite: Opens and closes connection automatically.
-    For PostgreSQL: Uses reusable connection, doesn't close on exit.
-    
+    Synchronous session context manager.
+
     Usage:
-        with get_connection_context() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users")
+        with get_session() as session:
+            result = session.execute(text("SELECT 1")).fetchall()
     """
-    db_type = get_db_type()
-    
-    if db_type == "sqlite":
-        conn = _get_sqlite_connection()
-        try:
-            yield conn
-        finally:
-            conn.close()
-    else:
-        conn = _get_postgres_connection()
-        yield conn
-        # Don't close PostgreSQL connection (reusable)
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+async def get_async_session() -> AsyncSession:
+    """
+    Async session dependency for FastAPI route injection.
+
+    Usage (FastAPI):
+        async def route(session: AsyncSession = Depends(get_async_session)):
+            ...
+    """
+    async with AsyncSessionLocal() as session:
+        yield session
 
 
 # =============================================================================
 # QUERY EXECUTION
 # =============================================================================
 
-def execute_query(sql: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
+def execute_query(sql: str, params: Optional[dict] = None) -> List[Dict[str, Any]]:
     """
-    Execute SQL query and return results as list of dictionaries.
-    
-    Works with both SQLite and PostgreSQL.
-    
+    Execute a read-only SQL query and return results as list of dicts.
+
     Args:
-        sql: SQL query to execute
-        params: Optional query parameters (for parameterized queries)
-    
+        sql: SQL query string (use :param_name for parameters)
+        params: Optional dict of query parameters
+
     Returns:
-        List of dictionaries where keys are column names
+        List of row dicts with column names as keys
     """
-    db_type = get_db_type()
-    
-    with get_connection_context() as conn:
-        cursor = conn.cursor()
-        
-        if params:
-            cursor.execute(sql, params)
-        else:
-            cursor.execute(sql)
-        
-        # Check if query returns results (SELECT vs INSERT/UPDATE)
-        if cursor.description is None:
-            return []
-        
-        if db_type == "sqlite":
-            # SQLite Row factory
-            columns = [col[0] for col in cursor.description]
-            rows = cursor.fetchall()
-            return [dict(zip(columns, row)) for row in rows]
-        else:
-            # PostgreSQL RealDictCursor already returns dicts
-            return [dict(row) for row in cursor.fetchall()]
+    with get_session() as session:
+        result = session.execute(text(sql), params or {})
+        if result.returns_rows:
+            columns = list(result.keys())
+            return [dict(zip(columns, row)) for row in result.fetchall()]
+        return []
+
+
+async def execute_query_async(sql: str, params: Optional[dict] = None) -> List[Dict[str, Any]]:
+    """
+    Execute a SQL query asynchronously via asyncpg.
+
+    Args:
+        sql: SQL query string (use :param_name for named parameters)
+        params: Optional dict of query parameters
+
+    Returns:
+        List of row dicts with column names as keys
+    """
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(text(sql), params or {})
+        if result.returns_rows:
+            columns = list(result.keys())
+            return [dict(zip(columns, row)) for row in result.fetchall()]
+        return []
+
+
+async def execute_write_async(sql: str, params: Optional[dict] = None) -> None:
+    """
+    Execute a write SQL statement asynchronously (CREATE TABLE for CSV uploads etc.).
+
+    Args:
+        sql: SQL statement
+        params: Optional parameters dict
+    """
+    async with AsyncSessionLocal() as session:
+        await session.execute(text(sql), params or {})
+        await session.commit()
 
 
 # =============================================================================
-# SCHEMA INTROSPECTION
+# SCHEMA INTROSPECTION (via SQLAlchemy Inspector)
 # =============================================================================
 
 def get_tables() -> List[str]:
-    """Get list of all table names in the database."""
-    db_type = get_db_type()
-    
-    if db_type == "sqlite":
-        sql = """
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name NOT LIKE 'sqlite_%'
-            ORDER BY name
-        """
-    else:
-        sql = """
-            SELECT table_name as name
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-            ORDER BY table_name
-        """
-    
-    results = execute_query(sql)
-    return [row["name"] for row in results]
+    """
+    Get all table names in the public schema using SQLAlchemy inspector.
+
+    Returns:
+        Sorted list of table names
+    """
+    inspector = sa_inspect(_sync_engine)
+    return sorted(inspector.get_table_names(schema="public"))
 
 
 def get_table_columns(table_name: str) -> List[Dict[str, Any]]:
-    """Get column information for a table."""
-    db_type = get_db_type()
-    
-    if db_type == "sqlite":
-        # Use PRAGMA for SQLite
-        with get_connection_context() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = []
-            for row in cursor.fetchall():
-                columns.append({
-                    "name": row[1],
-                    "type": row[2],
-                    "nullable": not row[3],
-                    "primary_key": bool(row[5])
-                })
-            return columns
-    else:
-        sql = """
-            SELECT 
-                column_name as name,
-                data_type as type,
-                is_nullable = 'YES' as nullable
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = %s
-            ORDER BY ordinal_position
-        """
-        return execute_query(sql, (table_name,))
+    """
+    Get column metadata for a table using SQLAlchemy inspector.
+
+    Args:
+        table_name: Table name (without schema prefix)
+
+    Returns:
+        List of column dicts: {name, type, nullable, primary_key}
+    """
+    inspector = sa_inspect(_sync_engine)
+    columns = inspector.get_columns(table_name, schema="public")
+    pk_constraint = inspector.get_pk_constraint(table_name, schema="public")
+    pk_columns = set(pk_constraint.get("constrained_columns", []))
+
+    return [
+        {
+            "name": col["name"],
+            "type": str(col["type"]),
+            "nullable": col.get("nullable", True),
+            "primary_key": col["name"] in pk_columns,
+        }
+        for col in columns
+    ]
+
+
+def get_foreign_keys(table_name: str) -> List[Dict[str, Any]]:
+    """
+    Get foreign key relationships for a table.
+
+    Returns:
+        List of FK dicts: {constrained_columns, referred_table, referred_columns}
+    """
+    inspector = sa_inspect(_sync_engine)
+    fks = inspector.get_foreign_keys(table_name, schema="public")
+    return [
+        {
+            "constrained_columns": fk["constrained_columns"],
+            "referred_table": fk["referred_table"],
+            "referred_columns": fk["referred_columns"],
+        }
+        for fk in fks
+    ]
+
+
+def get_full_schema() -> Dict[str, Dict[str, Any]]:
+    """
+    Get complete schema: tables, columns, and foreign keys.
+
+    Returns:
+        Dict mapping table_name → {columns: [...], foreign_keys: [...]}
+    """
+    tables = get_tables()
+    schema = {}
+    for table in tables:
+        schema[table] = {
+            "columns": get_table_columns(table),
+            "foreign_keys": get_foreign_keys(table),
+        }
+    return schema
+
+
+def get_schema_as_text() -> Dict[str, str]:
+    """
+    Get schema as human-readable text strings for embedding/LLM context.
+
+    Returns:
+        Dict mapping table_name → formatted schema string
+    """
+    schema = get_full_schema()
+    result = {}
+    for table, info in schema.items():
+        col_strs = []
+        for col in info["columns"]:
+            pk_marker = " PRIMARY KEY" if col["primary_key"] else ""
+            null_marker = "" if col["nullable"] else " NOT NULL"
+            col_strs.append(f'"{col["name"]}" {col["type"]}{pk_marker}{null_marker}')
+
+        fk_strs = []
+        for fk in info["foreign_keys"]:
+            fk_strs.append(
+                f'FK: "{fk["constrained_columns"][0]}" → '
+                f'"{fk["referred_table"]}"("{fk["referred_columns"][0]}")'
+            )
+
+        parts = [f'Table "{table}":'] + col_strs + fk_strs
+        result[table] = " | ".join(parts)
+
+    return result
 
 
 def get_row_count(table_name: str) -> int:
-    """Get row count for a table."""
-    # Basic SQL injection protection
-    if not table_name.isalnum() and not all(c.isalnum() or c == '_' for c in table_name):
-        raise ValueError(f"Invalid table name: {table_name}")
-    
-    results = execute_query(f"SELECT COUNT(*) as count FROM {table_name}")
+    """Get approximate row count for a table."""
+    # Sanitize table name to prevent SQL injection
+    if not all(c.isalnum() or c in ("_", "-") for c in table_name):
+        raise ValueError(f"Invalid table name: {table_name!r}")
+    results = execute_query(f'SELECT COUNT(*) as count FROM "{table_name}"')
     return results[0]["count"] if results else 0
 
 
@@ -347,47 +300,38 @@ def get_row_count(table_name: str) -> int:
 
 def test_connection() -> Dict[str, Any]:
     """
-    Test database connection and return status.
-    
+    Test database connection and return status info.
+
     Returns:
-        Dictionary with connection status and info
+        Dict with connected status, db_type, table_count, tables
     """
-    db_type = get_db_type()
-    
     try:
-        if db_type == "postgresql":
-            database_url = get_database_url()
-            # Mask password in URL
-            masked_url = database_url[:20] + "..." if database_url else None
-        else:
-            masked_url = get_database_path()
-        
-        # Test with simple query
         tables = get_tables()
-        
-        # Detect dataset
+
+        # Detect well-known dataset
         dataset_name = None
-        chinook_tables = {"Album", "Artist", "Customer", "Employee", "Genre", "Invoice", "InvoiceLine", "MediaType", "Playlist", "PlaylistTrack", "Track"}
-        # Both PascalCase and snake_case matches
-        chinook_tables_lower = {t.lower() for t in chinook_tables}
-        actual_tables_lower = {t.lower() for t in tables}
-        
-        if len(actual_tables_lower.intersection(chinook_tables_lower)) >= 5:
+        chinook_tables = {
+            "Album", "Artist", "Customer", "Employee", "Genre",
+            "Invoice", "InvoiceLine", "MediaType", "Playlist", "PlaylistTrack", "Track"
+        }
+        chinook_lower = {t.lower() for t in chinook_tables}
+        actual_lower = {t.lower() for t in tables}
+        if len(actual_lower & chinook_lower) >= 5:
             dataset_name = "Chinook"
-        
+
         return {
             "connected": True,
-            "db_type": db_type,
-            "connection_info": masked_url,
+            "db_type": "postgresql",
             "dataset_name": dataset_name,
             "table_count": len(tables),
-            "tables": tables[:5]  # First 5 tables
+            "tables": tables[:5],
         }
     except Exception as e:
+        logger.error("Database connection test failed: %s", e)
         return {
             "connected": False,
-            "db_type": db_type,
-            "error": str(e)
+            "db_type": "postgresql",
+            "error": str(e),
         }
 
 
@@ -395,51 +339,27 @@ def test_connection() -> Dict[str, Any]:
 # CLEANUP
 # =============================================================================
 
-def close_connections():
-    """Close any open database connections."""
-    global _pg_connection
-    
-    if _pg_connection is not None:
-        try:
-            _pg_connection.close()
-        except Exception:
-            pass
-        _pg_connection = None
+async def close_async_pool():
+    """Dispose async connection pool (called on app shutdown)."""
+    await _async_engine.dispose()
+    logger.info("Async database connection pool closed.")
+
+
+def close_sync_pool():
+    """Dispose sync connection pool."""
+    _sync_engine.dispose()
+    logger.info("Sync database connection pool closed.")
+
 
 # =============================================================================
-# ASYNC CONNECTION MANAGEMENT
+# BACKWARDS COMPATIBILITY (used by API routers before migration)
 # =============================================================================
 
-import asyncio
-from typing import Optional
-
-async def execute_query_async(sql: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
-    """
-    Execute SQL query asynchronously using thread pool.
-    
-    Uses asyncio.to_thread to run the synchronous execute_query function
-    in a separate thread. This works for both SQLite and PostgreSQL (psycopg2)
-    and avoids the need for a separate asyncpg connection pool.
-    """
-    return await asyncio.to_thread(execute_query, sql, params)
+def get_db_type() -> str:
+    """Always returns 'postgresql' in v2.0."""
+    return "postgresql"
 
 
-async def execute_write_async(sql: str, params: Optional[tuple] = None) -> None:
-    """
-    Execute a write SQL statement asynchronously (CREATE, INSERT, UPDATE, DELETE).
-    
-    Uses the sync psycopg2/sqlite3 connection (via get_connection_context)
-    wrapped in asyncio.to_thread. This avoids asyncpg pool issues with
-    Supabase pooler connections.
-    """
-    def _sync_write():
-        with get_connection_context() as conn:
-            cursor = conn.cursor()
-            if params:
-                cursor.execute(sql, params)
-            else:
-                cursor.execute(sql)
-            conn.commit()
-    
-    await asyncio.to_thread(_sync_write)
-
+def get_connection_context():
+    """Backwards-compat alias for get_session()."""
+    return get_session()
