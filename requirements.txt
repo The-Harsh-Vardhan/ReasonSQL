@@ -1,31 +1,72 @@
-# Core dependencies
-crewai[tools]>=0.86.0
-sqlalchemy>=2.0.0
-pydantic>=2.0.0
+# ============================================================
+# ReasonSQL 2.0 — Dependencies
+# ============================================================
+# Architecture: LangChain + LangGraph + FAISS + SQLAlchemy
+# ============================================================
 
-# LLM providers
-groq>=0.4.0
+# ------------------------------------------------------------
+# Core LangChain Ecosystem
+# ------------------------------------------------------------
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langgraph>=0.2.0
+langsmith>=0.2.0
 
-# UI
-streamlit>=1.30.0
-rich>=13.0.0
-
-# Utilities
-python-dotenv>=1.0.0
-tabulate>=0.9.0
-pandas>=2.0.0
-openpyxl>=3.1.0
-python-multipart>=0.0.6
-
-# Note: sqlite3 is part of Python standard library (no pip install needed)
-google-generativeai>=0.3.0
+# ------------------------------------------------------------
+# LLM Providers (via LiteLLM for unified interface)
+# ------------------------------------------------------------
 litellm>=1.0.0
+langchain-openai>=0.2.0          # For vLLM OpenAI-compatible endpoint (Qwen)
+google-generativeai>=0.3.0       # Gemini backend
 
+# ------------------------------------------------------------
+# Embeddings & Vector Search (FAISS)
+# ------------------------------------------------------------
+langchain-huggingface>=0.1.0     # HuggingFaceEmbeddings LangChain wrapper
+faiss-cpu>=1.8.0                 # FAISS vector index (CPU build)
+sentence-transformers>=3.0.0     # Embedding model + CrossEncoder backend
+
+# ------------------------------------------------------------
+# Hybrid Retrieval
+# ------------------------------------------------------------
+rank-bm25>=0.2.2                 # BM25 keyword retrieval for hybrid search
+
+# ------------------------------------------------------------
+# Database — SQLAlchemy + PostgreSQL
+# ------------------------------------------------------------
+sqlalchemy>=2.0.0                # ORM + connection pooling
+psycopg2-binary>=2.9.0           # PostgreSQL sync driver
+asyncpg>=0.29.0                  # PostgreSQL async driver
+pgvector>=0.3.0                  # pgvector SQLAlchemy type integration
+
+# ------------------------------------------------------------
 # API Server
+# ------------------------------------------------------------
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 httpx>=0.26.0
+python-multipart>=0.0.6          # File upload support
 
-# PostgreSQL support (for Supabase/cloud deployments)
-psycopg2-binary>=2.9.0
-asyncpg>=0.29.0
+# ------------------------------------------------------------
+# Data & Validation
+# ------------------------------------------------------------
+pydantic>=2.0.0
+pandas>=2.0.0
+openpyxl>=3.1.0                  # Excel file support
+tabulate>=0.9.0
+
+# ------------------------------------------------------------
+# Utilities
+# ------------------------------------------------------------
+python-dotenv>=1.0.0
+rich>=13.0.0                     # Console formatting
+redis[hiredis]>=5.0.0            # LLM response caching
+numpy>=1.24.0                    # Required by FAISS + embeddings
+
+# ------------------------------------------------------------
+# Testing
+# ------------------------------------------------------------
+pytest>=7.0.0
+pytest-asyncio>=0.23.0
+httpx>=0.26.0                    # TestClient for FastAPI

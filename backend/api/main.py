@@ -1,8 +1,11 @@
 """
-ReasonSQL FastAPI Application.
+ReasonSQL 2.0 — FastAPI Application.
 
-This module provides the REST API layer for the ReasonSQL NL→SQL system.
-All business logic is delegated to the orchestrator; no SQL or LLM logic here.
+Architecture:
+- LangChain + LangGraph multi-agent NL→SQL pipeline
+- FAISS + BM25 + Cross-Encoder hybrid schema retrieval
+- SQLAlchemy + PostgreSQL (pgvector) database layer
+- LangSmith observability (opt-in)
 
 Endpoints (via routers):
 - POST /query                     — Execute natural language query
@@ -10,7 +13,6 @@ Endpoints (via routers):
 - GET  /databases                 — List registered databases
 - GET  /databases/{id}/schema     — Get schema for a database
 - GET  /health                    — Health check
-- GET  /debug-db                  — Debug database connection (gated)
 """
 
 import os
@@ -19,8 +21,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.db_connection import get_db_type, test_connection
-from configs import DATABASE_PATH, DATABASE_URL
+from backend.db_connection import test_connection, close_async_pool
+from configs import DATABASE_URL
 
 from .deps import database_registry, logger, get_orchestrator
 from .schemas import DatabaseType
@@ -31,69 +33,31 @@ from .routers import query, databases, system, upload
 # DATABASE INITIALIZATION
 # =============================================================================
 
-CHINOOK_DB_URL = "https://github.com/lerocha/chinook-database/raw/master/ChinookDatabase/DataSources/Chinook_Sqlite.sqlite"
-
-
-def _ensure_database_exists() -> bool:
-    """Download the Chinook database if it doesn't exist (for SQLite only)."""
-    if get_db_type() == "postgresql":
-        logger.info("Using PostgreSQL database, skipping SQLite download")
-        return True
-
-    import urllib.request
-    from pathlib import Path
-
-    db_path = Path(DATABASE_PATH)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if db_path.exists():
-        logger.info("Database already exists at %s", db_path)
-        return True
-
-    logger.info("Database not found. Downloading Chinook database...")
-    try:
-        urllib.request.urlretrieve(CHINOOK_DB_URL, db_path)
-        logger.info("Database downloaded successfully (%d bytes)", db_path.stat().st_size)
-        return True
-    except Exception as e:
-        logger.error("Failed to download database: %s", e)
-        return False
-
-
 def _init_default_database():
-    """Register default database on startup (PostgreSQL or SQLite)."""
-    db_type = get_db_type()
+    """Register the PostgreSQL database on startup."""
+    logger.info("Connecting to PostgreSQL: %s...", DATABASE_URL[:40] + "..." if DATABASE_URL else "(not set)")
+    conn_status = test_connection()
 
-    if db_type == "postgresql":
-        logger.info("Initializing PostgreSQL database (Supabase)...")
-        conn_status = test_connection()
+    database_registry["default"] = {
+        "id": "default",
+        "type": DatabaseType.POSTGRES,
+        "connection_string": DATABASE_URL[:50] + "..." if DATABASE_URL else None,
+        "connected": conn_status.get("connected", False),
+        "table_count": conn_status.get("table_count", 0),
+        "dataset_name": conn_status.get("dataset_name"),
+    }
 
-        database_registry["default"] = {
-            "id": "default",
-            "type": DatabaseType.POSTGRES,
-            "connection_string": DATABASE_URL[:50] + "..." if DATABASE_URL else None,
-            "connected": conn_status.get("connected", False),
-            "table_count": conn_status.get("table_count", 0),
-        }
-
-        if conn_status.get("connected"):
-            logger.info(
-                "PostgreSQL connected with %d tables",
-                conn_status.get("table_count", 0),
-            )
-        else:
-            logger.error(
-                "PostgreSQL connection failed: %s",
-                conn_status.get("error", "Unknown error"),
-            )
+    if conn_status.get("connected"):
+        logger.info(
+            "✅ PostgreSQL connected: %d tables (dataset: %s)",
+            conn_status.get("table_count", 0),
+            conn_status.get("dataset_name", "unknown"),
+        )
     else:
-        db_exists = _ensure_database_exists()
-        database_registry["default"] = {
-            "id": "default",
-            "type": DatabaseType.SQLITE,
-            "file_path": DATABASE_PATH,
-            "connected": db_exists and os.path.exists(DATABASE_PATH),
-        }
+        logger.error(
+            "❌ PostgreSQL connection FAILED: %s",
+            conn_status.get("error", "Unknown error"),
+        )
 
 
 # =============================================================================
@@ -103,19 +67,18 @@ def _init_default_database():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    # Startup
+    # Startup: DB connection + LangGraph pipeline pre-warm
     _init_default_database()
     db_status = "connected" if database_registry.get("default", {}).get("connected") else "NOT connected"
-    logger.info("ReasonSQL API started. Default DB: %s (%s)", DATABASE_PATH, db_status)
+    logger.info("ReasonSQL 2.0 API started. PostgreSQL: %s", db_status)
 
-    # Pre-warm the singleton orchestrator
+    # Pre-warm LangGraph pipeline (compiles graph, no model loading)
     get_orchestrator()
 
     yield
 
-    # Shutdown
-    logger.info("ReasonSQL API shutting down.")
-    from backend.db_connection import close_async_pool
+    # Shutdown: close async connection pool
+    logger.info("ReasonSQL 2.0 API shutting down.")
     await close_async_pool()
 
 
@@ -125,8 +88,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ReasonSQL API",
-    description="Multi-Agent NL→SQL System API",
-    version="1.0.0",
+    description=(
+        "Multi-Agent NL→SQL System — LangChain + LangGraph + FAISS + SQLAlchemy\n"
+        "LLM Providers: Gemini → Groq → Qwen (vLLM)\n"
+        "Retrieval: Hybrid BM25 + FAISS + Cross-Encoder Reranking\n"
+        "Observability: LangSmith (opt-in)"
+    ),
+    version="2.0.0",
     lifespan=lifespan,
 )
 

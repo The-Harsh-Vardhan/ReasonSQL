@@ -1,24 +1,141 @@
-version: '3.8'
+version: '3.9'
+
+# ============================================================
+# ReasonSQL 2.0 — Multi-Container Docker Compose
+# ============================================================
+# Services:
+#   postgres  — PostgreSQL 16 with pgvector extension (Chinook dataset)
+#   backend   — FastAPI + LangChain + LangGraph + FAISS
+#   vllm      — [OPTIONAL] Qwen2.5-Coder-32B via vLLM (GPU required)
+# ============================================================
+#
+# Quick Start:
+#   cp .env.example .env          # Configure API keys
+#   docker-compose up -d          # Start postgres + backend
+#   curl http://localhost:8000/health
+#
+# To enable vLLM (requires NVIDIA GPU + 32GB VRAM):
+#   1. Uncomment the vllm service below
+#   2. Set ENABLE_VLLM_FALLBACK=true in .env
+#   3. Run: docker-compose up -d
+# ============================================================
 
 services:
-  nl2sql-app:
-    build: .
-    container_name: nl2sql-multiagent
-    ports:
-      - "8501:8501"
+
+  # ----------------------------------------------------------
+  # PostgreSQL 16 with pgvector extension
+  # Seeds Chinook dataset on first start via init.sql
+  # ----------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: reasonsql-postgres
     environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - LLM_MODEL=${LLM_MODEL:-gemini/gemini-pro}
-      - DATABASE_PATH=${DATABASE_PATH:-data/chinook.db}
+      POSTGRES_DB: reasonsql
+      POSTGRES_USER: reasonsql
+      POSTGRES_PASSWORD: reasonsql
+    ports:
+      - "5432:5432"
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-    restart: unless-stopped
+      - pgdata:/var/lib/postgresql/data
+      - ./data/Chinook_PostgreSql.sql:/docker-entrypoint-initdb.d/01-chinook.sql:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD-SHELL", "pg_isready -U reasonsql -d reasonsql"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ----------------------------------------------------------
+  # FastAPI Backend
+  # LangChain + LangGraph + FAISS + SQLAlchemy
+  # ----------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: reasonsql-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Database (use service name as host)
+      - DATABASE_URL=postgresql://reasonsql:reasonsql@postgres:5432/reasonsql
+      # LLM API keys (from .env file)
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_API_KEY_1=${GEMINI_API_KEY_1:-}
+      - GEMINI_API_KEY_2=${GEMINI_API_KEY_2:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      # LangSmith Tracing (opt-in)
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-false}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-ReasonSQL-2.0}
+      # vLLM Qwen (opt-in, uncomment vllm service below)
+      - ENABLE_VLLM_FALLBACK=${ENABLE_VLLM_FALLBACK:-false}
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
+      - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen2.5-Coder-32B-Instruct}
+      # System
+      - VERBOSE=${VERBOSE:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      # Redis (optional caching)
+      - REDIS_URL=${REDIS_URL:-}
+    volumes:
+      - faiss_cache:/app/cache/faiss_index   # Persist FAISS index across restarts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 30s
+    restart: unless-stopped
+
+  # ----------------------------------------------------------
+  # vLLM — Self-Hosted Qwen2.5-Coder-32B-Instruct
+  # ⚠️  OPTIONAL: Uncomment to enable local Qwen inference
+  # ⚠️  REQUIRES: NVIDIA GPU with ~32GB VRAM
+  # ⚠️  Also set ENABLE_VLLM_FALLBACK=true in .env
+  # ----------------------------------------------------------
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   container_name: reasonsql-vllm
+  #   command: >
+  #     --model Qwen/Qwen2.5-Coder-32B-Instruct
+  #     --max-model-len 4096
+  #     --dtype bfloat16
+  #     --gpu-memory-utilization 0.90
+  #   ports:
+  #     - "8001:8000"
+  #   volumes:
+  #     - huggingface_cache:/root/.cache/huggingface
+  #   environment:
+  #     - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  #     interval: 60s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 120s
+  #   restart: unless-stopped
+
+
+# ----------------------------------------------------------
+# Named Volumes
+# ----------------------------------------------------------
+volumes:
+  pgdata:
+    name: reasonsql_pgdata
+  faiss_cache:
+    name: reasonsql_faiss_cache
+  # huggingface_cache:        # Uncomment with vllm service
+  #   name: reasonsql_hf_cache

@@ -1,73 +1,22 @@
-"""Orchestrator module initialization."""
+"""
+Orchestrator module — ReasonSQL 2.0 compatibility shim.
 
-# Legacy orchestrators — optional (crewai may not be installed)
-try:
-    from .crew_orchestrator import ReasonSQLOrchestrator as LegacyOrchestrator, ReasoningTraceCollector, run_query as legacy_run_query
-except ImportError:
-    LegacyOrchestrator = None
-    ReasoningTraceCollector = None
-    legacy_run_query = None
+In v2.0, the orchestrator is replaced by the LangGraph pipeline in backend.graph.
+This module exists for backwards compatibility with any code that imports from here.
 
-try:
-    from .enhanced_orchestrator import (
-        EnhancedReasonSQLOrchestrator,
-        ReasoningTraceCollector as EnhancedTraceCollector,
-        run_query as enhanced_run_query,
-        detect_ambiguous_terms,
-        is_complex_query
-    )
-except ImportError:
-    EnhancedReasonSQLOrchestrator = None
-    EnhancedTraceCollector = None
-    enhanced_run_query = None
-    detect_ambiguous_terms = None
-    is_complex_query = None
+For new code, import directly from backend.graph:
+    from backend.graph import get_pipeline, PipelineState
+"""
 
-try:
-    from .deterministic_orchestrator import (
-        DeterministicOrchestrator,
-        Step,
-        run_query as deterministic_run_query
-    )
-except ImportError:
-    DeterministicOrchestrator = None
-    Step = None
-    deterministic_run_query = None
+# Re-export from the new LangGraph pipeline module
+from backend.graph import build_pipeline, get_pipeline, PipelineState
 
-try:
-    from .quota_optimized_orchestrator import (
-        QuotaOptimizedOrchestrator,
-        LLMBudget,
-        LLMStage,
-        BudgetExceededError,
-        create_quota_optimized_orchestrator,
-        run_query as quota_run_query
-    )
-except ImportError:
-    QuotaOptimizedOrchestrator = None
-    LLMBudget = None
-    LLMStage = None
-    BudgetExceededError = None
-    create_quota_optimized_orchestrator = None
-    quota_run_query = None
-
-# Primary orchestrator — must succeed
-from .batch_optimized_orchestrator import (
-    BatchOptimizedOrchestrator,
-    RateLimiter,
-    RateLimitExceeded,
-    run_query  # Default run_query uses batch-optimized (5 req/min hard limit)
-)
-
-# Default export: Use batch-optimized for HARD rate limiting and agent batching
-ReasonSQLOrchestrator = BatchOptimizedOrchestrator
-NL2SQLOrchestrator = ReasonSQLOrchestrator
+# Backwards-compatibility aliases (used by tests and CLI)
+NL2SQLOrchestrator = None   # Deprecated — use get_pipeline()
+ReasonSQLOrchestrator = None
 
 __all__ = [
-    "BatchOptimizedOrchestrator",
-    "ReasonSQLOrchestrator",
-    "NL2SQLOrchestrator",
-    "RateLimiter",
-    "RateLimitExceeded",
-    "run_query",
+    "build_pipeline",
+    "get_pipeline",
+    "PipelineState",
 ]
