@@ -47,10 +47,16 @@ def _build_reasoning_trace_api(pipeline_state: dict) -> ReasoningTraceAPI:
         for entry in raw_trace
     ]
 
-    # Determine status
+    # Determine status — check self-correction recovery: if row_count > 0, the query succeeded
+    # even if execution_error has a stale value from before self-correction succeeded.
+    row_count = pipeline_state.get("row_count", 0)
+    intent = pipeline_state.get("intent", "DATA_QUERY")
+    exec_error = pipeline_state.get("execution_error", "")
+    recovered = row_count > 0 or intent in ("META_QUERY", "AMBIGUOUS")
+
     if pipeline_state.get("pipeline_error"):
         final_status = ExecutionStatusAPI.ERROR
-    elif pipeline_state.get("execution_error"):
+    elif bool(exec_error) and not recovered:
         final_status = ExecutionStatusAPI.ERROR
     elif pipeline_state.get("intent") == "AMBIGUOUS":
         final_status = ExecutionStatusAPI.BLOCKED
@@ -137,7 +143,14 @@ async def execute_query(request: QueryRequest):
         results = final_state.get("execution_result") or []
         row_count = final_state.get("row_count", 0)
         is_meta = final_state.get("intent") == "META_QUERY"
-        has_error = bool(final_state.get("pipeline_error") or final_state.get("execution_error"))
+        # A query succeeded if: no pipeline_error, AND either we have results or it's meta/ambiguous
+        # execution_error can be a stale value from a failed attempt that was later self-corrected;
+        # trust execution_result + row_count as the ground truth for DATA_QUERY success.
+        pipeline_failed = bool(final_state.get("pipeline_error"))
+        exec_error = final_state.get("execution_error", "")
+        # If we got results (row_count > 0) or it's a meta/ambiguous query, self-correction succeeded
+        recovered = (row_count > 0 or is_meta or final_state.get("intent") == "AMBIGUOUS")
+        has_error = pipeline_failed or (bool(exec_error) and not recovered)
 
         reasoning_trace = _build_reasoning_trace_api(final_state)
         reasoning_trace.total_time_ms = total_time_ms
