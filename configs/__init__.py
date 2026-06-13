@@ -1,62 +1,65 @@
-"""Config module initialization."""
+"""Config module initialization — ReasonSQL 2.0."""
 from .settings import (
-    # Core configuration
-    get_llm,
-    get_database_uri,
-    get_gemini_key_count,
-    DATABASE_PATH,
+    # Database
     DATABASE_URL,
-    DATABASE_TYPE,
+    DB_POOL_SIZE,
+    DB_MAX_OVERFLOW,
+
+    # LLM
+    LLM_MODEL,
+    GROQ_MODEL,
+    MAX_LLM_CALLS_PER_QUERY,
+    VLLM_BASE_URL,
+    VLLM_MODEL,
+    ENABLE_VLLM_FALLBACK,
+
+    # LangSmith
+    LANGSMITH_ENABLED,
+
+    # Retrieval
+    EMBEDDING_MODEL,
+    RERANKER_MODEL,
+    HYBRID_RETRIEVAL_K,
+    RERANKER_TOP_N,
+    RAG_THRESHOLD_TABLES,
+
+    # System
     MAX_RETRIES,
     DEFAULT_LIMIT,
-    VERBOSE,
-    FORBIDDEN_KEYWORDS,
     MAX_RESULT_ROWS,
+    VERBOSE,
+
+    # Safety
+    FORBIDDEN_KEYWORDS,
+
+    # Agent prompts
     AGENT_PROMPTS,
-    # LLM configuration
-    LLM_PROVIDER,
-    LLM_MODEL,
-    MAX_LLM_TOKENS,
-    MAX_LLM_CALLS_PER_QUERY,
-    # Provider configuration
-    PRIMARY_PROVIDER,
-    SECONDARY_PROVIDER,
-    TERTIARY_PROVIDER,
-    ENABLE_QWEN_FALLBACK,
-    GROQ_ALLOWED_MODELS,
-    GROQ_FALLBACK_MODEL,
-    # Validation
+
+    # Errors
     ConfigurationError,
-    validate_configuration,
 )
 
 __all__ = [
-    # Core configuration
-    "get_llm",
-    "get_database_uri",
-    "get_gemini_key_count",
-    "DATABASE_PATH",
     "DATABASE_URL",
-    "DATABASE_TYPE",
+    "DB_POOL_SIZE",
+    "DB_MAX_OVERFLOW",
+    "LLM_MODEL",
+    "GROQ_MODEL",
+    "MAX_LLM_CALLS_PER_QUERY",
+    "VLLM_BASE_URL",
+    "VLLM_MODEL",
+    "ENABLE_VLLM_FALLBACK",
+    "LANGSMITH_ENABLED",
+    "EMBEDDING_MODEL",
+    "RERANKER_MODEL",
+    "HYBRID_RETRIEVAL_K",
+    "RERANKER_TOP_N",
+    "RAG_THRESHOLD_TABLES",
     "MAX_RETRIES",
     "DEFAULT_LIMIT",
+    "MAX_RESULT_ROWS",
     "VERBOSE",
     "FORBIDDEN_KEYWORDS",
-    "MAX_RESULT_ROWS",
     "AGENT_PROMPTS",
-    # LLM configuration
-    "LLM_PROVIDER",
-    "LLM_MODEL",
-    "MAX_LLM_TOKENS",
-    "MAX_LLM_CALLS_PER_QUERY",
-    # Provider configuration
-    "PRIMARY_PROVIDER",
-    "SECONDARY_PROVIDER",
-    "TERTIARY_PROVIDER",
-    "ENABLE_QWEN_FALLBACK",
-    "GROQ_ALLOWED_MODELS",
-    "GROQ_FALLBACK_MODEL",
-    # Validation
     "ConfigurationError",
-    "validate_configuration",
 ]
