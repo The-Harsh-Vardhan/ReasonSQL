@@ -9,6 +9,9 @@ import SchemaExplorer from "./components/SchemaExplorer";
 import QuerySuggestions from "./components/QuerySuggestions";
 import ResultsChart from "./components/ResultsChart";
 import FileUploadModal from "./components/FileUploadModal";
+import FeedbackButtons from "./components/FeedbackButtons";
+import ClarificationModal from "./components/ClarificationModal";
+import DatabaseConnectModal from "./components/DatabaseConnectModal";
 import { useToast } from "./components/Toast";
 
 // API Types
@@ -35,6 +38,24 @@ interface QueryResponse {
   reasoning_trace?: ReasoningTrace;
   warnings: string[];
   error?: string;
+  cache_hit?: boolean;
+  run_id?: string;
+}
+
+// SSE stream event from /query/stream
+interface StreamEvent {
+  node: string;
+  label: string;
+  icon: string;
+  description: string;
+  step: number;
+}
+
+interface RegisteredDB {
+  id: string;
+  name: string;
+  type: "postgres" | "sqlite";
+  connected: boolean;
 }
 
 const getApiBase = () => {
@@ -134,13 +155,35 @@ function HomeInner() {
   const [demoIndex, setDemoIndex] = useState(0);
   const [simpleMode, setSimpleMode] = useState(false);
   const [queryHistory, setQueryHistory] = useState<HistoryEntry[]>([]);
-  const [conversationHistory, setConversationHistory] = useState<HistoryEntry[]>([]); // Active conversation context
+  const [conversationHistory, setConversationHistory] = useState<HistoryEntry[]>([]);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [showAbout, setShowAbout] = useState(false);
   const [showVisuals, setShowVisuals] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
+
+  // ── Feature: SSE streaming agent events ──
+  const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
+
+  // ── Feature: Session persistence (LangGraph checkpointing) ──
+  const [sessionId] = useState(() => {
+    if (typeof window === "undefined") return crypto.randomUUID();
+    let id = sessionStorage.getItem("rsql_session_id");
+    if (!id) { id = crypto.randomUUID(); sessionStorage.setItem("rsql_session_id", id); }
+    return id;
+  });
+
+  // ── Feature: Clarification (HITL) ──
+  const [showClarification, setShowClarification] = useState(false);
+  const [clarificationQuestions, setClarificationQuestions] = useState<string[]>([]);
+  const [pendingClarificationQuery, setPendingClarificationQuery] = useState("");
+
+  // ── Feature: Multi-database ──
+  const [databases, setDatabases] = useState<RegisteredDB[]>([{ id: "default", name: "Chinook (default)", type: "postgres", connected: true }]);
+  const [activeDatabaseId, setActiveDatabaseId] = useState("default");
+  const [showDbModal, setShowDbModal] = useState(false);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { copied, copy } = useCopyFeedback();
@@ -180,22 +223,24 @@ function HomeInner() {
     saveJSON(STATS_KEY, stats);
   }, []);
 
-  const handleSubmit = async (e?: React.FormEvent) => {
+  const handleSubmit = async (e?: React.FormEvent, overrideQuery?: string) => {
     if (e) e.preventDefault();
-    if (!query.trim() || loading) return;
+    const submitQuery = (overrideQuery || query).trim();
+    if (!submitQuery || loading) return;
 
     setLoading(true);
     setResponse(null);
+    setStreamEvents([]);
+    setShowClarification(false);
 
     // Shareable link
     const url = new URL(window.location.href);
-    url.searchParams.set("q", query.trim());
+    url.searchParams.set("q", submitQuery);
     router.replace(url.pathname + url.search, { scroll: false });
 
     const startTime = Date.now();
 
     // Prepare history from active conversation context (last 5 turns)
-    // Uses real answers so the LLM can resolve follow-ups like "what about their invoices?"
     const history = conversationHistory.slice(-5).flatMap(entry => [
       { role: "user", content: entry.query },
       {
@@ -207,56 +252,58 @@ function HomeInner() {
     ]);
 
     try {
-      const res = await fetch(buildApiUrl("query"), {
+      // ── SSE Streaming ──────────────────────────────────────────────────────
+      const res = await fetch(buildApiUrl("query/stream"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          query: query.trim(),
-          history: history
+          query: submitQuery,
+          history,
+          thread_id: sessionId,
+          database_id: activeDatabaseId,
         }),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({ detail: res.statusText }));
-        const errResp: QueryResponse = {
-          success: false,
-          answer: errorData.detail || `Server error: ${res.status} ${res.statusText}`,
-          error: `HTTP ${res.status}: ${errorData.detail || res.statusText}`,
-          row_count: 0, is_meta_query: false,
-          reasoning_trace: { actions: [], final_status: "error", total_time_ms: 0, correction_attempts: 0 },
-          warnings: res.status === 503 ? ["Backend database is not connected."] : [],
-        };
-        setResponse(errResp);
-        addToast("Query failed", "error");
-        trackQuery(false, Date.now() - startTime);
+      if (!res.ok || !res.body) {
+        // Fallback to regular /query if stream fails
+        const res2 = await fetch(buildApiUrl("query"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: submitQuery, history, thread_id: sessionId, database_id: activeDatabaseId }),
+        });
+        const data = await res2.json();
+        processResponse(data, startTime, submitQuery);
         return;
       }
 
-      const data = await res.json();
-      const normalizedData: QueryResponse = {
-        ...data,
-        reasoning_trace: { actions: [], final_status: "unknown", total_time_ms: 0, correction_attempts: 0, ...(data.reasoning_trace || {}) },
-        row_count: data.row_count ?? 0,
-        is_meta_query: data.is_meta_query ?? false,
-        warnings: data.warnings || [],
-      };
-      setResponse(normalizedData);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-      const timeMs = normalizedData.reasoning_trace?.total_time_ms || Date.now() - startTime;
-      const newEntry: HistoryEntry = {
-        query: query.trim(),
-        answer: normalizedData.answer || "",
-        sql_used: normalizedData.sql_used || undefined,
-        success: normalizedData.success,
-        time: timeMs,
-        timestamp: Date.now(),
-      };
-      setQueryHistory(prev => { const u = [...prev, newEntry].slice(-20); saveJSON(HISTORY_KEY, u); return u; });
-      // Append to active conversation context
-      setConversationHistory(prev => [...prev, newEntry].slice(-10));
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      trackQuery(normalizedData.success, timeMs);
-      addToast(normalizedData.success ? "Query completed" : "Query returned an error", normalizedData.success ? "success" : "error");
+        // Parse SSE events from buffer
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+
+        for (const part of parts) {
+          const line = part.replace(/^data: /, "").trim();
+          if (!line || line === "[DONE]") continue;
+          try {
+            const event = JSON.parse(line);
+            if (event.type === "node_complete") {
+              setStreamEvents(prev => [...prev, event as StreamEvent]);
+            } else if (event.type === "result" && event.data) {
+              processResponse(event.data, startTime, submitQuery);
+            } else if (event.type === "error") {
+              throw new Error(event.message);
+            }
+          } catch { /* ignore parse errors */ }
+        }
+      }
 
     } catch (err) {
       setResponse({
@@ -271,6 +318,45 @@ function HomeInner() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const processResponse = (data: QueryResponse, startTime: number, submitQuery: string) => {
+    const normalizedData: QueryResponse = {
+      ...data,
+      reasoning_trace: { actions: [], final_status: "unknown", total_time_ms: 0, correction_attempts: 0, ...(data.reasoning_trace || {}) },
+      row_count: data.row_count ?? 0,
+      is_meta_query: data.is_meta_query ?? false,
+      warnings: data.warnings || [],
+    };
+    setResponse(normalizedData);
+
+    // Detect AMBIGUOUS → show clarification modal
+    if (normalizedData.reasoning_trace?.final_status === "blocked") {
+      const questions = (normalizedData.reasoning_trace?.actions || [])
+        .filter(a => a.agent_name === "ClarificationAgent")
+        .map(a => a.detail || a.summary)
+        .filter(Boolean);
+      setClarificationQuestions(questions);
+      setPendingClarificationQuery(submitQuery);
+      setShowClarification(true);
+    }
+
+    const timeMs = normalizedData.reasoning_trace?.total_time_ms || Date.now() - startTime;
+    const newEntry: HistoryEntry = {
+      query: submitQuery,
+      answer: normalizedData.answer || "",
+      sql_used: normalizedData.sql_used || undefined,
+      success: normalizedData.success,
+      time: timeMs,
+      timestamp: Date.now(),
+    };
+    setQueryHistory(prev => { const u = [...prev, newEntry].slice(-20); saveJSON(HISTORY_KEY, u); return u; });
+    setConversationHistory(prev => [...prev, newEntry].slice(-10));
+    trackQuery(normalizedData.success, timeMs);
+    addToast(
+      normalizedData.cache_hit ? "⚡ Served from cache" : (normalizedData.success ? "Query completed" : "Query returned an error"),
+      normalizedData.success ? "success" : "error"
+    );
   };
 
   // ── Ctrl+Enter ──
@@ -481,8 +567,9 @@ function HomeInner() {
               <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
               Live at: reason-sql.vercel.app
             </a>
-            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">Quota-Optimized</span>
-            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">Safety-Validated</span>
+            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">LangGraph Pipeline</span>
+            <span className="px-4 py-1.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">FAISS + BM25 RAG</span>
+            <span className="px-4 py-1.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 backdrop-blur-sm uppercase tracking-tighter hidden sm:inline">Self-Healing SQL</span>
             <button
               id="open-upload-modal"
               onClick={() => setShowUpload(true)}
@@ -493,6 +580,15 @@ function HomeInner() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
               </svg>
               <span className="font-bold uppercase tracking-widest text-xs">Upload Data</span>
+            </button>
+            <button
+              id="open-db-connect-modal"
+              onClick={() => setShowDbModal(true)}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 backdrop-blur-sm hover:bg-indigo-500/25 hover:border-indigo-400/50 hover:scale-105 transition-all duration-300 cursor-pointer"
+              title="Connect another database"
+            >
+              <span className="text-xs">🗄️</span>
+              <span className="font-bold uppercase tracking-widest text-xs">Connect DB</span>
             </button>
           </div>
 
@@ -600,6 +696,25 @@ function HomeInner() {
                   </button>
                 )}
               </div>
+
+              {/* DB Selector */}
+              {databases.length > 1 && (
+                <select
+                  id="db-selector"
+                  value={activeDatabaseId}
+                  onChange={e => setActiveDatabaseId(e.target.value)}
+                  disabled={loading}
+                  className="px-3 py-2 rounded-xl glass-card text-sm text-gray-300 border border-white/15 bg-transparent focus:outline-none focus:border-indigo-500/50 disabled:opacity-50"
+                  title="Select active database"
+                >
+                  {databases.map(db => (
+                    <option key={db.id} value={db.id} className="bg-slate-900">
+                      {db.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+
               <button
                 type="submit"
                 disabled={loading || !query.trim()}
@@ -636,7 +751,7 @@ function HomeInner() {
           {/* Loading */}
           {loading && (
             <div className="py-8">
-              <ProcessingDiagram />
+              <ProcessingDiagram streamEvents={streamEvents} isLive={streamEvents.length > 0} />
             </div>
           )}
 
@@ -653,6 +768,12 @@ function HomeInner() {
                       {response.success ? "Success" : "Error"}
                       {response.is_meta_query && " (Meta)"}
                     </span>
+                    {/* Cache hit badge */}
+                    {response.cache_hit && (
+                      <span className="px-3 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30" title="Result served from Redis/in-memory cache">
+                        ⚡ Cached
+                      </span>
+                    )}
                     {/* Share button */}
                     <button
                       onClick={() => { navigator.clipboard.writeText(window.location.href); addToast("Link copied! Share it with anyone.", "info"); }}
@@ -696,12 +817,17 @@ function HomeInner() {
                     {/* Answer */}
                     <div>
                       <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center justify-between mb-3">
                         <h3 className="text-lg font-semibold text-white">Answer</h3>
                         <CopyBtn text={response.answer} id="answer" label="Copy" />
                       </div>
                       <p className="text-gray-300 text-lg leading-relaxed bg-black/20 rounded-xl p-4 border border-white/5">
                         {response.answer}
                       </p>
+                      {/* Feedback buttons — only shown when LangSmith run_id is available */}
+                      <div className="mt-3 flex justify-end">
+                        <FeedbackButtons runId={response.run_id} apiBase={API_BASE} />
+                      </div>
                     </div>
 
                     {/* Generated SQL with syntax highlighting */}
@@ -833,6 +959,32 @@ function HomeInner() {
 
       {/* File Upload Modal */}
       <FileUploadModal open={showUpload} onClose={() => setShowUpload(false)} apiBase={API_BASE} />
+
+      {/* Database Connect Modal */}
+      <DatabaseConnectModal
+        isOpen={showDbModal}
+        onClose={() => setShowDbModal(false)}
+        apiBase={API_BASE}
+        onConnected={(db) => {
+          setDatabases(prev => [...prev.filter(d => d.id !== db.id), db]);
+          setActiveDatabaseId(db.id);
+          addToast(`Connected to ${db.name}!`, "success");
+        }}
+      />
+
+      {/* Clarification Modal (HITL) */}
+      <ClarificationModal
+        isOpen={showClarification}
+        questions={clarificationQuestions}
+        originalQuery={pendingClarificationQuery}
+        onDismiss={() => setShowClarification(false)}
+        onSubmit={(clarification) => {
+          setShowClarification(false);
+          const followUp = `${pendingClarificationQuery} — clarification: ${clarification}`;
+          setQuery(followUp);
+          handleSubmit(undefined, followUp);
+        }}
+      />
     </div>
   );
 }

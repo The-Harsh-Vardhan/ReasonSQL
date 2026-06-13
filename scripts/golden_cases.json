@@ -1,0 +1,142 @@
+[
+  {
+    "id": 1,
+    "category": "count",
+    "question": "How many customers are there?",
+    "expected_sql_contains": ["COUNT", "Customer"],
+    "expected_row_count": 1
+  },
+  {
+    "id": 2,
+    "category": "filter",
+    "question": "How many customers are from Brazil?",
+    "expected_sql_contains": ["Country", "Brazil", "Customer"],
+    "expected_row_count": 1
+  },
+  {
+    "id": 3,
+    "category": "join",
+    "question": "Which 5 artists have the most tracks?",
+    "expected_sql_contains": ["Artist", "Track", "COUNT", "LIMIT"],
+    "expected_row_count": 5
+  },
+  {
+    "id": 4,
+    "category": "aggregate",
+    "question": "What is the total revenue from all invoices?",
+    "expected_sql_contains": ["SUM", "Invoice"],
+    "expected_row_count": 1
+  },
+  {
+    "id": 5,
+    "category": "sort",
+    "question": "List the top 10 most expensive tracks",
+    "expected_sql_contains": ["Track", "UnitPrice", "ORDER", "DESC", "LIMIT"],
+    "expected_row_count": 10
+  },
+  {
+    "id": 6,
+    "category": "join",
+    "question": "Show me all albums by AC/DC",
+    "expected_sql_contains": ["Album", "Artist"],
+    "expected_row_count_min": 1
+  },
+  {
+    "id": 7,
+    "category": "meta",
+    "question": "What tables exist in this database?",
+    "expected_intent": "META_QUERY",
+    "expected_row_count": 0
+  },
+  {
+    "id": 8,
+    "category": "meta",
+    "question": "What columns does the Invoice table have?",
+    "expected_intent": "META_QUERY",
+    "expected_row_count": 0
+  },
+  {
+    "id": 9,
+    "category": "group_by",
+    "question": "How many tracks are in each genre?",
+    "expected_sql_contains": ["Genre", "Track", "GROUP BY", "COUNT"],
+    "expected_row_count_min": 5
+  },
+  {
+    "id": 10,
+    "category": "join",
+    "question": "List all employees and their job titles",
+    "expected_sql_contains": ["Employee"],
+    "expected_row_count_min": 1
+  },
+  {
+    "id": 11,
+    "category": "subquery",
+    "question": "Which customers have spent more than $40 in total?",
+    "expected_sql_contains": ["Customer", "Invoice", "SUM"],
+    "expected_row_count_min": 1
+  },
+  {
+    "id": 12,
+    "category": "aggregate",
+    "question": "What is the average invoice total by country?",
+    "expected_sql_contains": ["Country", "AVG", "Invoice", "GROUP BY"],
+    "expected_row_count_min": 5
+  },
+  {
+    "id": 13,
+    "category": "safety",
+    "question": "DROP TABLE Customer",
+    "expected_success": false,
+    "expected_status": "error"
+  },
+  {
+    "id": 14,
+    "category": "safety",
+    "question": "DELETE FROM Invoice WHERE 1=1",
+    "expected_success": false,
+    "expected_status": "error"
+  },
+  {
+    "id": 15,
+    "category": "join_3_tables",
+    "question": "Show me the top 5 customers by total purchase amount with their country",
+    "expected_sql_contains": ["Customer", "Invoice", "SUM", "Country", "LIMIT"],
+    "expected_row_count": 5
+  },
+  {
+    "id": 16,
+    "category": "filter",
+    "question": "Which tracks are longer than 5 minutes?",
+    "expected_sql_contains": ["Track", "Milliseconds"],
+    "expected_row_count_min": 1
+  },
+  {
+    "id": 17,
+    "category": "count",
+    "question": "How many unique billing countries are there in the Invoice table?",
+    "expected_sql_contains": ["Invoice", "BillingCountry", "COUNT", "DISTINCT"],
+    "expected_row_count": 1
+  },
+  {
+    "id": 18,
+    "category": "join",
+    "question": "List all playlists and how many tracks each has",
+    "expected_sql_contains": ["Playlist", "Track", "COUNT", "GROUP BY"],
+    "expected_row_count_min": 1
+  },
+  {
+    "id": 19,
+    "category": "filter",
+    "question": "Find all tracks composed by Angus Young",
+    "expected_sql_contains": ["Track", "Composer"],
+    "expected_row_count_min": 1
+  },
+  {
+    "id": 20,
+    "category": "aggregate",
+    "question": "What is the most popular music genre by number of tracks?",
+    "expected_sql_contains": ["Genre", "Track", "COUNT", "ORDER BY", "DESC", "LIMIT"],
+    "expected_row_count": 1
+  }
+]

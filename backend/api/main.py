@@ -6,9 +6,13 @@ Architecture:
 - FAISS + BM25 + Cross-Encoder hybrid schema retrieval
 - SQLAlchemy + PostgreSQL (pgvector) database layer
 - LangSmith observability (opt-in)
+- Redis/in-memory result caching
+- Session persistence via LangGraph MemorySaver
 
 Endpoints (via routers):
 - POST /query                     — Execute natural language query
+- POST /query/stream              — Execute via SSE streaming
+- POST /feedback                  — Submit LangSmith feedback (👍/👎)
 - POST /databases                 — Register a database connection
 - GET  /databases                 — List registered databases
 - GET  /databases/{id}/schema     — Get schema for a database
@@ -26,7 +30,7 @@ from configs import DATABASE_URL
 
 from .deps import database_registry, logger, get_orchestrator
 from .schemas import DatabaseType
-from .routers import query, databases, system, upload
+from .routers import query, databases, system, upload, stream, feedback
 
 
 # =============================================================================
@@ -92,6 +96,7 @@ app = FastAPI(
         "Multi-Agent NL→SQL System — LangChain + LangGraph + FAISS + SQLAlchemy\n"
         "LLM Providers: Gemini → Groq → Qwen (vLLM)\n"
         "Retrieval: Hybrid BM25 + FAISS + Cross-Encoder Reranking\n"
+        "Features: SSE Streaming · Redis Cache · Session Persistence · LangSmith Feedback\n"
         "Observability: LangSmith (opt-in)"
     ),
     version="2.0.0",
@@ -122,6 +127,8 @@ app.add_middleware(
 
 app.include_router(system.router)
 app.include_router(query.router)
+app.include_router(stream.router)
+app.include_router(feedback.router)
 app.include_router(databases.router)
 app.include_router(upload.router)
 

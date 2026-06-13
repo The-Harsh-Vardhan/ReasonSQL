@@ -77,5 +77,38 @@ services:
         value: "3.11.7"
       - key: ALLOWED_ORIGINS
         value: "https://reason-sql.vercel.app,https://reasonsql.vercel.app"  # Vercel production domains
+      
+      # ===========================================
+      # LangSmith Observability (Feature B/G)
+      # Set LANGCHAIN_API_KEY in Render dashboard
+      # ===========================================
+      - key: LANGCHAIN_TRACING_V2
+        value: "true"
+      - key: LANGCHAIN_PROJECT
+        value: "reasonsql-prod"
+      - key: LANGCHAIN_API_KEY
+        sync: false  # Set in Render dashboard → Environment Variables
+
+      # ===========================================
+      # Redis Caching (Feature C — Upstash)
+      # Create free DB at https://upstash.com
+      # Set both in Render dashboard:
+      #   UPSTASH_REDIS_REST_URL = https://xxxx.upstash.io
+      #   UPSTASH_REDIS_REST_TOKEN = AXxx...
+      # ===========================================
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false  # Set in Render dashboard
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false  # Set in Render dashboard
+      - key: CACHE_ENABLED
+        value: "true"
+      - key: CACHE_TTL_SECONDS
+        value: "300"
+
+      # ===========================================
+      # Query Settings
+      # ===========================================
+      - key: QUERY_TIMEOUT_SECONDS
+        value: "120"
     
     healthCheckPath: /health

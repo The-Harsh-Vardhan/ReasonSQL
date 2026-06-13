@@ -27,9 +27,9 @@ LangSmith Integration:
 
 import logging
 from typing import Literal
-from functools import lru_cache
 
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 
 from configs import MAX_RETRIES
 from .state import PipelineState
@@ -146,7 +146,7 @@ def route_after_correction(
 # GRAPH COMPILATION
 # =============================================================================
 
-def build_pipeline():
+def build_pipeline(checkpointer: MemorySaver | None = None):
     """
     Build and compile the LangGraph NL→SQL StateGraph.
 
@@ -166,6 +166,10 @@ def build_pipeline():
         response_synthesis
           ↓
         END
+
+    Args:
+        checkpointer: Optional MemorySaver for conversation persistence.
+                      When provided, callers must pass thread_id in config.
 
     Returns:
         Compiled LangGraph Runnable (callable with .invoke() or .ainvoke())
@@ -240,9 +244,12 @@ def build_pipeline():
     # response_synthesis → END (always)
     graph.add_edge("response_synthesis", END)
 
-    # ── Compile ──────────────────────────────────────────────────────────────
-    compiled = graph.compile()
-    logger.info("LangGraph pipeline compiled successfully.")
+    # ── Compile ──────────────────────────────────────────────────────────
+    compiled = graph.compile(checkpointer=checkpointer)
+    logger.info(
+        "LangGraph pipeline compiled (checkpointer=%s).",
+        type(checkpointer).__name__ if checkpointer else "None",
+    )
     return compiled
 
 
@@ -251,20 +258,43 @@ def build_pipeline():
 # =============================================================================
 
 _pipeline = None
+_checkpointer: MemorySaver | None = None
+
+
+def get_checkpointer() -> MemorySaver:
+    """
+    Get the singleton MemorySaver checkpointer.
+
+    MemorySaver stores conversation state in-process (reset on restart).
+    For production persistence, swap with SqliteSaver or RedisSaver.
+
+    Returns:
+        MemorySaver instance
+    """
+    global _checkpointer
+    if _checkpointer is None:
+        _checkpointer = MemorySaver()
+        logger.info("LangGraph MemorySaver checkpointer initialized.")
+    return _checkpointer
 
 
 def get_pipeline():
     """
-    Get the singleton compiled LangGraph pipeline.
+    Get the singleton compiled LangGraph pipeline with MemorySaver.
 
     The pipeline is compiled once at startup and reused for all queries.
     It is thread-safe and async-safe.
 
+    The checkpointer enables:
+    - Conversation history persistence across turns (Feature E)
+    - Human-in-the-loop interrupts (Feature H)
+
     Returns:
-        Compiled LangGraph Runnable
+        Compiled LangGraph Runnable with checkpointer
     """
     global _pipeline
     if _pipeline is None:
-        logger.info("Compiling LangGraph pipeline...")
-        _pipeline = build_pipeline()
+        logger.info("Compiling LangGraph pipeline with MemorySaver checkpointer...")
+        checkpointer = get_checkpointer()
+        _pipeline = build_pipeline(checkpointer=checkpointer)
     return _pipeline

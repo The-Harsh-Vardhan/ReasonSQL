@@ -36,6 +36,12 @@ from backend.llm import (
     RESPONSE_SYNTHESIS_PROMPT,
     META_QUERY_PROMPT,
 )
+from backend.llm.output_schemas import (
+    SQLGeneratorOutput,
+    ResponseSynthesizerOutput,
+    SelfCorrectionOutput,
+    MetaQueryOutput,
+)
 from configs import (
     FORBIDDEN_KEYWORDS,
     DEFAULT_LIMIT,
@@ -121,6 +127,45 @@ async def _invoke_llm_json(prompt_template, variables: Dict[str, Any]) -> Dict[s
         if match:
             return json.loads(match.group())
         raise ValueError(f"LLM returned non-JSON response: {content[:200]}") from e
+
+
+async def _invoke_llm_structured(
+    prompt_template,
+    variables: Dict[str, Any],
+    output_schema,
+    fallback_top_key: str,
+) -> Dict[str, Any]:
+    """
+    Try LangChain structured output first; fall back to JSON parsing.
+
+    Structured output uses the provider's function-calling / JSON-mode API.
+    If the provider (e.g., Gemini via LiteLLM) doesn't support it cleanly,
+    falls back to _invoke_llm_json transparently.
+
+    Args:
+        prompt_template: LangChain ChatPromptTemplate
+        variables: Template variable values
+        output_schema: Pydantic BaseModel class for structured output
+        fallback_top_key: Top-level key to extract from JSON fallback response
+
+    Returns:
+        Dict of the schema's fields
+    """
+    llm = _get_llm()
+    try:
+        # Try structured output (provider function-calling / JSON schema)
+        structured_chain = prompt_template | llm.with_structured_output(output_schema)
+        result = await structured_chain.ainvoke(variables)
+        logger.debug("[StructuredOutput] Success via %s", output_schema.__name__)
+        return result.model_dump()
+    except Exception as e:
+        logger.debug(
+            "[StructuredOutput] %s fallback to JSON (%s)",
+            output_schema.__name__, str(e)[:80]
+        )
+        # Fall back to JSON parsing
+        raw = await _invoke_llm_json(prompt_template, variables)
+        return raw.get(fallback_top_key, {})
 
 
 def _add_trace(state: PipelineState, agent: str, summary: str, detail: str = "") -> None:
@@ -284,20 +329,24 @@ async def sql_generation_node(state: PipelineState) -> PipelineState:
     """
     Generate SQL query from the query plan and schema context.
 
-    Uses the SQL_GENERATION_PROMPT which enforces PostgreSQL syntax,
-    double-quoting, LIMIT clause, and no SELECT *.
+    Uses structured output (SQLGeneratorOutput) with JSON fallback.
+    Enforces PostgreSQL syntax, double-quoting, LIMIT, and no SELECT *.
     """
     logger.info("[SQLGeneration] Generating SQL for: %r", state.get("resolved_query"))
 
     try:
-        result = await _invoke_llm_json(SQL_GENERATION_PROMPT, {
-            "resolved_query": state.get("resolved_query", state.get("user_query", "")),
-            "schema_context": state.get("schema_context", ""),
-            "query_plan": state.get("query_plan", ""),
-            "default_limit": DEFAULT_LIMIT,
-        })
+        sql_data = await _invoke_llm_structured(
+            SQL_GENERATION_PROMPT,
+            {
+                "resolved_query": state.get("resolved_query", state.get("user_query", "")),
+                "schema_context": state.get("schema_context", ""),
+                "query_plan": state.get("query_plan", ""),
+                "default_limit": DEFAULT_LIMIT,
+            },
+            SQLGeneratorOutput,
+            "sql_generator",
+        )
 
-        sql_data = result.get("sql_generator", {})
         generated_sql = sql_data.get("sql", "").strip()
 
         _add_trace(
@@ -428,7 +477,7 @@ async def sql_execution_node(state: PipelineState) -> PipelineState:
 
 async def self_correction_node(state: PipelineState) -> PipelineState:
     """
-    Fix a failed SQL query using LLM analysis.
+    Fix a failed SQL query using LLM analysis with structured output.
 
     Only invoked when sql_execution fails or safety_validation rejects.
     Limited by max_retries to prevent infinite loops.
@@ -440,14 +489,18 @@ async def self_correction_node(state: PipelineState) -> PipelineState:
     error = state.get("execution_error") or "; ".join(state.get("safety_violations", []))
 
     try:
-        result = await _invoke_llm_json(SELF_CORRECTION_PROMPT, {
-            "user_query": state.get("user_query", ""),
-            "schema_context": state.get("schema_context", ""),
-            "failed_sql": failed_sql,
-            "error_message": error,
-        })
+        correction_data = await _invoke_llm_structured(
+            SELF_CORRECTION_PROMPT,
+            {
+                "user_query": state.get("user_query", ""),
+                "schema_context": state.get("schema_context", ""),
+                "failed_sql": failed_sql,
+                "error_message": error,
+            },
+            SelfCorrectionOutput,
+            "self_correction",
+        )
 
-        correction_data = result.get("self_correction", {})
         corrected_sql = correction_data.get("corrected_sql", "").strip()
         root_cause = correction_data.get("root_cause", "Unknown")
 
@@ -528,14 +581,18 @@ async def response_synthesis_node(state: PipelineState) -> PipelineState:
         return {**state, "final_answer": answer, "key_insights": []}
 
     try:
-        result = await _invoke_llm_json(RESPONSE_SYNTHESIS_PROMPT, {
-            "user_query": state.get("user_query", ""),
-            "sql_used": state.get("corrected_sql") or state.get("generated_sql", ""),
-            "row_count": row_count,
-            "results_preview": results_preview,
-        })
+        synth_data = await _invoke_llm_structured(
+            RESPONSE_SYNTHESIS_PROMPT,
+            {
+                "user_query": state.get("user_query", ""),
+                "sql_used": state.get("corrected_sql") or state.get("generated_sql", ""),
+                "row_count": row_count,
+                "results_preview": results_preview,
+            },
+            ResponseSynthesizerOutput,
+            "response_synthesizer",
+        )
 
-        synth_data = result.get("response_synthesizer", {})
         answer = synth_data.get("answer", "Query completed successfully.")
         insights = synth_data.get("key_insights", [])
 
