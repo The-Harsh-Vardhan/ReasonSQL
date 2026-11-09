@@ -30,14 +30,13 @@ To show judges/users that naive "prompt → SQL" approaches fail on:
 The multi-agent system handles all of these correctly.
 """
 
-import sqlite3
 import re
 from typing import Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 
-# from litellm import completion # Lazy loaded instead
-from configs import DATABASE_PATH
+# Same database and same LLM as the LangGraph pipeline, so a comparison measures the pipeline, not the setup.
+from backend.db_connection import execute_query, get_schema_as_text, get_db_type
 
 
 # ============================================================
@@ -93,31 +92,7 @@ def get_raw_schema() -> str:
     This mimics what a naive approach would have access to.
     """
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        
-        # Get all tables
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        tables = cursor.fetchall()
-        
-        schema_lines = ["DATABASE SCHEMA:", ""]
-        
-        for (table_name,) in tables:
-            if table_name.startswith('sqlite_'):
-                continue
-            
-            # Get columns (just names and types)
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = cursor.fetchall()
-            
-            col_list = [f"{col[1]} ({col[2]})" for col in columns]
-            schema_lines.append(f"Table: {table_name}")
-            schema_lines.append(f"  Columns: {', '.join(col_list)}")
-            schema_lines.append("")
-        
-        conn.close()
-        return "\n".join(schema_lines)
-        
+        return "DATABASE SCHEMA:\n\n" + "\n".join(get_schema_as_text().values())
     except Exception as e:
         return f"Error reading schema: {str(e)}"
 
@@ -155,19 +130,13 @@ def generate_naive_sql(question: str, schema: Optional[str] = None) -> Tuple[str
 
 Question: {question}
 
-Generate a valid SQLite query. Return ONLY the SQL, nothing else.
+Generate a valid {get_db_type()} query. Return ONLY the SQL, nothing else.
 Do not explain. Do not add comments. Just the SQL query."""
 
     try:
-        # Single LLM call - no retries
-        from litellm import completion
-        response = completion(
-            model="groq/llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1  # Low temperature for consistency
-        )
-        
-        sql = response.choices[0].message.content.strip()
+        # Single LLM call - no retries, same model chain as the pipeline
+        from backend.llm.providers import get_llm_with_fallback
+        sql = get_llm_with_fallback(temperature=0.1).invoke(prompt).content.strip()
         
         # Basic cleanup (remove markdown if present)
         sql = sql.replace("```sql", "").replace("```", "").strip()
@@ -243,31 +212,13 @@ def execute_naive_sql(sql: str, validate_safety: bool = True) -> NaiveResult:
     
     # Execute with protection
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        cursor.execute(sql)
-        rows = cursor.fetchall()
-        
-        column_names = [desc[0] for desc in cursor.description] if cursor.description else []
-        data = [dict(row) for row in rows]
-        
-        conn.close()
-        
+        data = execute_query(sql)
         return NaiveResult(
             status=NaiveStatus.SUCCESS,
             generated_sql=sql,
             result_data=data,
             row_count=len(data),
-            column_names=column_names
-        )
-        
-    except sqlite3.Error as e:
-        return NaiveResult(
-            status=NaiveStatus.EXECUTION_ERROR,
-            generated_sql=sql,
-            error_message=f"SQL Error: {str(e)}"
+            column_names=list(data[0].keys()) if data else []
         )
     except Exception as e:
         return NaiveResult(

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from backend.adapters import SQLiteAdapter, create_adapter, DatabaseType
 
 DB_PATH = "./data/chinook.db"
-db_exists = os.path.exists(DB_PATH)
+db_exists = os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) > 0  # an empty placeholder file has no tables
 
 
 def test_adapter_imports():

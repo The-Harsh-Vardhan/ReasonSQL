@@ -35,7 +35,7 @@ rank-bm25>=0.2.2                 # BM25 keyword retrieval for hybrid search
 # ------------------------------------------------------------
 # Database — SQLAlchemy + PostgreSQL
 # ------------------------------------------------------------
-sqlalchemy>=2.0.0                # ORM + connection pooling
+sqlalchemy[asyncio]>=2.0.0       # ORM + connection pooling (asyncio extra pulls in greenlet)
 psycopg2-binary>=2.9.0           # PostgreSQL sync driver
 asyncpg>=0.29.0                  # PostgreSQL async driver
 pgvector>=0.3.0                  # pgvector SQLAlchemy type integration

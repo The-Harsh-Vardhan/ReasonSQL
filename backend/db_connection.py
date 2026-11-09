@@ -40,9 +40,15 @@ logger = logging.getLogger("reasonsql.db")
 # =============================================================================
 
 def _build_sync_url(url: str) -> str:
-    """Convert any postgres:// or postgresql+asyncpg:// URL to psycopg2 sync URL."""
+    """Convert any postgres:// or postgresql+asyncpg:// URL to a psycopg2 sync URL.
+
+    The driver is named explicitly: SQLAlchemy 2.1 made psycopg (v3) the default for a bare
+    postgresql:// URL, but requirements.txt installs psycopg2-binary.
+    """
     url = url.replace("postgresql+asyncpg://", "postgresql://")
     url = url.replace("postgres://", "postgresql://")
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
     return url
 
 

@@ -5,7 +5,9 @@ from urllib.parse import urlparse, unquote
 from fastapi import APIRouter, HTTPException, status
 
 from backend.db_connection import test_connection
-from configs import LLM_PROVIDER
+from configs import LLM_MODEL
+
+LLM_PROVIDER = LLM_MODEL.split("/", 1)[0]  # "gemini/gemini-2.0-flash" -> "gemini"
 
 from ..schemas import HealthResponse
 from ..deps import database_registry, logger, ENABLE_DEBUG_ENDPOINTS
@@ -44,7 +46,7 @@ async def health_check():
 
     response = HealthResponse(
         status="healthy",
-        version="1.0.0",
+        version="2.0.0",
         llm_provider=LLM_PROVIDER,
         database_connected=db_connected,
         db_type=db_type,
