@@ -134,3 +134,6 @@ temp_*
 scratch_*
 
 # Note: debug_*.txt files in Extras/ are tracked for reference
+
+# Local agent tooling
+.github/skills/
