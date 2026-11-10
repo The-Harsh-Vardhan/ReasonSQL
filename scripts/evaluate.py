@@ -73,6 +73,7 @@ def evaluate_case(case: dict, response: dict) -> dict:
         "row_count": response.get("row_count", 0),
         "sql": response.get("sql_used", ""),
         "cache_hit": response.get("cache_hit", False),
+        "retries": response.get("reasoning_trace", {}).get("correction_attempts", 0),
     }
 
     checks_passed = 0
@@ -154,6 +155,78 @@ def evaluate_case(case: dict, response: dict) -> dict:
     return result
 
 
+def run_suite(cases: list[dict], ask) -> list[dict]:
+    """Score every case. `ask(question) -> response dict` shaped like the POST /query response."""
+    results = []
+    for i, case in enumerate(cases, 1):
+        console.print(f"[{i:02d}/{len(cases):02d}] {case['question'][:60]}...")
+        t0 = time.time()
+        try:
+            result = evaluate_case(case, ask(case["question"]))
+        except Exception as exc:
+            result = {"id": case["id"], "category": case["category"], "question": case["question"][:60],
+                      "passed": False, "score": 0, "retries": 0, "details": [f"❌ Request error: {exc}"]}
+        result["elapsed_ms"] = round((time.time() - t0) * 1000)
+        results.append(result)
+        console.print(f"   {'✅' if result['passed'] else '❌'} ({result['elapsed_ms']}ms) — "
+                      f"{result['details'][0] if result['details'] else 'no checks'}")
+    return results
+
+
+def naive_ask(question: str) -> dict:
+    """Baseline: one prompt (schema + question → SQL), same LLM and database as the pipeline, no agents."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from backend.adapters.naive_sql_generator import run_naive_query
+    r = run_naive_query(question)
+    return {
+        "success": r.is_success,
+        "sql_used": r.generated_sql,
+        "row_count": r.row_count,
+        "reasoning_trace": {"final_status": "success" if r.is_success else "error", "correction_attempts": 0},
+    }
+
+
+def by_category(results: list[dict]) -> dict[str, tuple[int, int]]:
+    out: dict[str, list[int]] = {}
+    for r in results:
+        s = out.setdefault(r["category"], [0, 0])
+        s[0] += r["passed"]
+        s[1] += 1
+    return {k: tuple(v) for k, v in sorted(out.items())}
+
+
+def pct(passed: int, total: int) -> str:
+    return f"{passed}/{total} ({passed / total * 100:.0f}%)" if total else "0/0"
+
+
+def write_report(path: str, cases: list[dict], pipeline: list[dict], baseline: Optional[list[dict]]) -> None:
+    """Markdown report: summary, per category, per case. Pipeline vs baseline when both ran."""
+    def total(rs): return sum(r["passed"] for r in rs), len(rs)
+    lines = [f"# ReasonSQL evaluation, {time.strftime('%Y-%m-%d')}", "",
+             f"{len(cases)} golden cases from `scripts/golden_cases.json` against the Chinook database.",
+             "A case passes only if every check defined for it passes (SQL fragments, row count, status).", ""]
+    head = "| | Pipeline |" + (" Baseline (single prompt) |" if baseline else "")
+    lines += [head, "|---|---|" + ("---|" if baseline else ""),
+              f"| **All cases** | {pct(*total(pipeline))} |" + (f" {pct(*total(baseline))} |" if baseline else "")]
+    pc, bc = by_category(pipeline), by_category(baseline or [])
+    lines += [f"| {cat} | {pct(*pc[cat])} |" + (f" {pct(*bc.get(cat, (0, 0)))} |" if baseline else "") for cat in pc]
+    avg = sum(r["elapsed_ms"] for r in pipeline) / max(len(pipeline), 1)
+    lines += ["", f"Pipeline mean latency: {avg:.0f} ms. Self-correction retries used: "
+              f"{sum(r.get('retries', 0) for r in pipeline)} across all cases.", "",
+              "## Per case", "", "| Case | Category | Question | Pipeline | Retries | ms |" + (" Baseline |" if baseline else ""),
+              "|---|---|---|---|---|---|" + ("---|" if baseline else "")]
+    b = {r["id"]: r for r in baseline or []}
+    for r in pipeline:
+        row = (f"| {r['id']} | {r['category']} | {r['question']} | {'pass' if r['passed'] else 'fail'} "
+               f"| {r.get('retries', 0)} | {r['elapsed_ms']} |")
+        if baseline:
+            row += f" {'pass' if b.get(r['id'], {}).get('passed') else 'fail'} |"
+        lines.append(row)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    console.print(f"\nReport written to {path}")
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -168,6 +241,9 @@ def main():
                         help="Skip LangSmith dataset creation")
     parser.add_argument("--timeout", type=int, default=60,
                         help="Request timeout in seconds (default: 60)")
+    parser.add_argument("--baseline", action="store_true",
+                        help="Also run every case as a single prompt (same LLM and DB, no agents) for comparison")
+    parser.add_argument("--report", help="Write a Markdown report to this path, e.g. docs/results/eval.md")
     args = parser.parse_args()
 
     # Load test cases
@@ -182,37 +258,22 @@ def main():
     console.print(f"\n[bold cyan]ReasonSQL Evaluation Suite[/bold cyan]" if RICH else "\nReasonSQL Evaluation Suite")
     console.print(f"API: {api_url} | Cases: {len(cases)}\n" if RICH else f"API: {api_url} | Cases: {len(cases)}\n")
 
-    results = []
-    errors = []
-
     with httpx.Client(timeout=args.timeout) as client:
-        for i, case in enumerate(cases, 1):
-            console.print(f"[{i:02d}/{len(cases):02d}] {case['question'][:60]}..." if RICH else f"[{i:02d}/{len(cases):02d}] {case['question'][:60]}...")
-            t0 = time.time()
-            try:
-                resp = client.post(
-                    f"{api_url}/query",
-                    json={"query": case["question"], "database_id": "default"},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                elapsed = time.time() - t0
-                result = evaluate_case(case, data)
-                result["elapsed_ms"] = round(elapsed * 1000)
-                results.append(result)
-                status = "✅" if result["passed"] else "❌"
-                console.print(f"   {status} ({result['elapsed_ms']}ms) — {result['details'][0] if result['details'] else 'no checks'}")
-            except Exception as exc:
-                elapsed = time.time() - t0
-                errors.append({"id": case["id"], "question": case["question"], "error": str(exc)})
-                results.append({
-                    "id": case["id"], "category": case["category"],
-                    "question": case["question"][:60],
-                    "passed": False, "score": 0,
-                    "details": [f"❌ Request error: {exc}"],
-                    "elapsed_ms": round(elapsed * 1000),
-                })
-                console.print(f"   ⚠️  Error: {str(exc)[:80]}")
+        def api_ask(question: str) -> dict:
+            resp = client.post(f"{api_url}/query", json={"query": question, "database_id": "default"})
+            resp.raise_for_status()
+            return resp.json()
+        results = run_suite(cases, api_ask)
+
+    baseline = None
+    if args.baseline:
+        console.print("\nBaseline: single prompt, same LLM and database")
+        baseline = run_suite(cases, naive_ask)
+        b_passed = sum(r["passed"] for r in baseline)
+        console.print(f"Baseline: {pct(b_passed, len(baseline))}")
+
+    if args.report:
+        write_report(args.report, cases, results, baseline)
 
     # Summary
     total = len(results)

@@ -17,6 +17,9 @@ Or individual sections:
     python tests/test_migration.py --section api
 """
 
+
+# A standalone script against live LLMs and Postgres (run it directly, see above), not a pytest suite.
+__test__ = False
 import os
 import sys
 import asyncio

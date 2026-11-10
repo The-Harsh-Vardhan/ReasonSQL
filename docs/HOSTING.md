@@ -1,3 +1,7 @@
+---
+title: Hosting
+---
+
 # 🌐 Hosting Guide: ReasonSQL
 
 This guide explains how to deploy the ReasonSQL multi-agent system to production using **Supabase** (Database), **Render** (Backend), and **Vercel** (Frontend).

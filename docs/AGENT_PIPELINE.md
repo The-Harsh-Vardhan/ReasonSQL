@@ -1,3 +1,9 @@
+---
+title: v1 pipeline design
+---
+
+> **Historical document.** This describes the v1 12-agent, 4-batch orchestrator. ReasonSQL 2.0 replaced it with a LangGraph `StateGraph` of 7 nodes; see [Architecture](architecture) for the current pipeline.
+
 # 🔄 NL2SQL Agent Pipeline - Detailed Flow
 
 > **Complete visualization of how 12 specialized agents collaborate to convert natural language to SQL**
