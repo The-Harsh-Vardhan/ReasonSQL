@@ -13,11 +13,53 @@
 
 > **Why simple "prompt → SQL" fails, and how a LangGraph multi-agent pipeline with hybrid RAG fixes it.**
 
-🔗 **[Live Demo →](https://reason-sql.vercel.app)**
+ReasonSQL turns a plain-English question into a validated, executed PostgreSQL query and an explained answer. A LangGraph `StateGraph` routes each question through hybrid schema retrieval, intent analysis and clarification, SQL generation, a deterministic safety validator, execution, and a self-correction loop. A FastAPI backend serves it to a Next.js dashboard.
+
+🔗 **[Live Demo →](https://reason-sql.vercel.app)** · 📚 **[Docs site →](https://the-harsh-vardhan.github.io/ReasonSQL/)**
+
+**Result:** ~50% accuracy → **85%+ on complex multi-join queries.** This is the project's previously reported figure; a reproducible baseline-vs-pipeline evaluation (`reasonsql eval --baseline`) is tracked in [#6](https://github.com/The-Harsh-Vardhan/ReasonSQL/issues/6).
 
 ---
 
-## ⚡ TL;DR
+## What it does
+
+- **Retrieves only the relevant tables.** For schemas above 5 tables, BM25 keyword search and FAISS semantic search are fused with Reciprocal Rank Fusion and reranked by a cross-encoder (`ms-marco-MiniLM-L-6-v2`).
+- **Analyzes and clarifies before writing SQL.** One reasoning step does intent analysis (`DATA_QUERY`, `META_QUERY`, `AMBIGUOUS`), clarification, decomposition and planning. Ambiguous questions ("best", "recent") get targeted questions back instead of a guess.
+- **Validates SQL deterministically.** A rule-based safety node blocks `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `CREATE`, `TRUNCATE` and `SELECT *`, and adds a `LIMIT` when one is missing. No LLM call.
+- **Fixes its own errors.** Safety rejections and execution errors loop through a self-correction agent (up to 2 retries by default), and every corrected query is re-validated.
+- **Is traceable.** The API returns a full reasoning trace, and LangSmith tracing is opt-in. LLM calls fall back Gemini → Groq → Qwen (vLLM, optional).
+
+---
+
+## Architecture
+
+The diagram is traced from `backend/graph/pipeline.py` (`build_pipeline`). Edge labels are the return values of the routing functions; any node that sets `pipeline_error` routes straight to `END`.
+
+```mermaid
+flowchart TD
+    START([START]) --> SR["schema_retrieval<br/>BM25 + FAISS + RRF + cross-encoder"]
+    SR -->|ok| RS["reasoning<br/>intent, clarification, plan"]
+    SR -->|pipeline_error| END_([END])
+    RS -->|DATA_QUERY| SG["sql_generation"]
+    RS -->|"META_QUERY / AMBIGUOUS"| SY["response_synthesis"]
+    RS -->|pipeline_error| END_
+    SG --> SV["safety_validation<br/>rule-based, no LLM"]
+    SV -->|approved| EX["sql_execution<br/>SQLAlchemy async"]
+    SV -->|"rejected, retries left"| SC["self_correction"]
+    SV -->|"rejected, retries exhausted"| SY
+    EX -->|success| SY
+    EX -->|"error, retries left"| SC
+    EX -->|"error, retries exhausted"| SY
+    SC -->|"re-validate"| SV
+    SC -->|pipeline_error| END_
+    SY --> END_
+```
+
+The clarification agent is one of four logical agents batched into the `reasoning` node's single LLM call (intent analyzer, clarification agent, query decomposer, query planner). Node-by-node notes, the retrieval pipeline and the deployment topology are in [`docs/architecture.md`](docs/architecture.md). The v1 orchestrator design is kept for history in [`docs/AGENT_PIPELINE.md`](docs/AGENT_PIPELINE.md).
+
+---
+
+## ⚡ Naive vs ReasonSQL
 
 | ❌ Naive Approach | ✅ ReasonSQL 2.0 |
 |-------------------|----------------|
@@ -28,7 +70,71 @@
 | No safety (SELECT * on 1M rows) | Rule-based safety validator enforces LIMIT + no SELECT * |
 | Black box | LangSmith traces every LLM call, full reasoning trace in UI |
 
-**Result:** ~50% accuracy → **85%+ on complex multi-join queries**
+---
+
+## 🚀 Quickstart
+
+### Docker (PostgreSQL + FastAPI backend)
+
+```bash
+# 1. Clone
+git clone https://github.com/The-Harsh-Vardhan/ReasonSQL.git
+cd ReasonSQL
+
+# 2. Configure
+cp .env.example .env
+# Add your GEMINI_API_KEY (required) and optionally LANGCHAIN_API_KEY
+
+# 3. Launch (PostgreSQL + FastAPI backend)
+docker-compose up -d
+
+# 4. Verify
+curl http://localhost:8000/health
+
+# 5. Start frontend (new terminal)
+cd frontend-next
+npm install && npm run dev
+# Visit http://localhost:3000
+```
+
+### CLI (`reasonsql`)
+
+The package installs a `reasonsql` command with three subcommands (`backend/main.py`). Runtime dependencies live in `requirements.txt`, so install those first (inside a virtual environment).
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+
+# Ask one question against the configured database (same LangGraph path as POST /query)
+reasonsql ask "How many customers are there?"
+
+# Several questions, one per line; --json prints the full API-shaped response
+reasonsql ask --file queries.txt --json
+
+# Start the FastAPI backend (defaults: 127.0.0.1:8000, reload off)
+reasonsql serve --port 8000 --reload
+
+# Run the golden-case evaluation against a running API; extra options pass through to scripts/evaluate.py
+reasonsql eval --baseline --report docs/results/eval.md
+```
+
+`reasonsql ask` exits non-zero if any question fails. `python -m backend.main "question"` still works and is treated as `ask`. `reasonsql eval` needs the API running (`--api-url`, default `http://localhost:8000`); `--baseline` also runs each case as a single prompt on the same LLM and database for comparison. The golden cases are in `scripts/golden_cases.json`.
+
+### Local Dev (without Docker)
+
+```bash
+# Install deps
+pip install -r requirements.txt
+
+# Ensure PostgreSQL is running (or use Docker for just postgres)
+docker-compose up -d postgres
+
+# Set DATABASE_URL in .env to localhost
+# DATABASE_URL=postgresql://reasonsql:reasonsql@localhost:5432/reasonsql
+
+# Start backend
+uvicorn backend.api.main:app --port 8000 --reload
+```
 
 ---
 
@@ -60,95 +166,34 @@
 
 ---
 
-## 🏗️ Architecture
+## 🔬 Retrieval Pipeline (RAG)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       Next.js Frontend                              │
-│                  POST /query → FastAPI Backend                      │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────────────────┐
-│                 LangGraph StateGraph Pipeline                       │
-│                                                                     │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐  │
-│  │   Schema     │───▶│  Reasoning   │───▶│   SQL Generation     │  │
-│  │  Retrieval   │    │ (LangChain)  │    │   (LangChain)        │  │
-│  │  BM25+FAISS  │    │ Intent+Plan  │    └──────────┬───────────┘  │
-│  │  +CrossEnc.  │    └──────────────┘               │              │
-│  └──────────────┘          │                        ▼              │
-│                     META/AMBIGUOUS        ┌──────────────────────┐  │
-│                            │             │  Safety Validation   │  │
-│                            ▼             │  (Deterministic)     │  │
-│                   ┌──────────────────┐   └──────────┬───────────┘  │
-│                   │    Response      │              │              │
-│                   │    Synthesis     │◀────┐        ▼              │
-│                   │  (LangChain)     │     │   SQL Execution     │  │
-│                   └──────────────────┘     │   (SQLAlchemy)     │  │
-│                                            │        │              │
-│                                      ┌─────┘        │ error        │
-│                                      │    ┌─────────▼──────────┐  │
-│                                      └────│  Self-Correction   │  │
-│                                           │  (LangChain, cond) │  │
-│                                           └────────────────────┘  │
-│                                                                     │
-│  LLM Fallback: Gemini → Groq → Qwen (vLLM, optional)              │
-│  Observability: LangSmith (opt-in via LANGCHAIN_TRACING_V2=true)   │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────────────────┐
-│              Docker Compose Infrastructure                          │
-│  ┌──────────────────┐  ┌──────────────────────────────────────────┐ │
-│  │  PostgreSQL 16   │  │  FastAPI + LangChain + LangGraph + FAISS │ │
-│  │  + pgvector ext  │  │  Port 8000                               │ │
-│  │  Port 5432       │  └──────────────────────────────────────────┘ │
-│  └──────────────────┘                                               │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  vLLM (Qwen2.5-Coder-32B-Instruct) — OPTIONAL, GPU required │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🚀 Quick Start (Docker)
-
-```bash
-# 1. Clone
-git clone https://github.com/The-Harsh-Vardhan/ReasonSQL.git
-cd ReasonSQL
-git checkout 2.0
-
-# 2. Configure
-cp .env.example .env
-# Add your GEMINI_API_KEY (required) and optionally LANGCHAIN_API_KEY
-
-# 3. Launch (PostgreSQL + FastAPI backend)
-docker-compose up -d
-
-# 4. Verify
-curl http://localhost:8000/health
-
-# 5. Start frontend (new terminal)
-cd frontend-next
-npm install && npm run dev
-# Visit http://localhost:3000
-```
-
-### Local Dev (without Docker)
-
-```bash
-# Install deps
-pip install -r requirements.txt
-
-# Ensure PostgreSQL is running (or use Docker for just postgres)
-docker-compose up -d postgres
-
-# Set DATABASE_URL in .env to localhost
-# DATABASE_URL=postgresql://reasonsql:reasonsql@localhost:5432/reasonsql
-
-# Start backend
-uvicorn backend.api.main:app --port 8000 --reload
+User Query
+    │
+    ▼
+┌────────────────────────────────────────────────────────┐
+│ Hybrid Schema Retrieval                                │
+│                                                        │
+│  ┌──────────────┐    ┌────────────────────────────┐   │
+│  │ BM25 Search  │    │ FAISS Semantic Search       │   │
+│  │ (keyword)    │    │ (HuggingFace embeddings)    │   │
+│  └──────┬───────┘    └────────────┬───────────────┘   │
+│         │                        │                    │
+│         └────────────┬───────────┘                    │
+│                      ▼                                 │
+│           Reciprocal Rank Fusion                       │
+│                      │                                 │
+│                      ▼                                 │
+│         Cross-Encoder Reranking                        │
+│       (ms-marco-MiniLM-L-6-v2)                         │
+│                      │                                 │
+│                      ▼                                 │
+│         Top-N Most Relevant Tables                     │
+└────────────────────────────────────────────────────────┘
+    │
+    ▼
+Schema Context injected into LLM prompt
 ```
 
 ---
@@ -195,11 +240,12 @@ The vLLM server exposes an OpenAI-compatible API endpoint. The pipeline uses it 
 ```
 ReasonSQL/
 ├── backend/
+│   ├── main.py                 # 🆕 `reasonsql` CLI: ask / serve / eval
 │   ├── api/                    # FastAPI routers, deps, schemas
 │   ├── graph/                  # 🆕 LangGraph StateGraph pipeline
 │   │   ├── state.py            #    TypedDict PipelineState
 │   │   ├── nodes.py            #    7 node functions (agents)
-│   │   └── pipeline.py        #    StateGraph compilation + routing
+│   │   └── pipeline.py         #    StateGraph compilation + routing
 │   ├── llm/                    # 🆕 LangChain LLM providers
 │   │   ├── providers.py        #    Gemini/Groq/Qwen with .with_fallbacks()
 │   │   └── prompts.py          #    ChatPromptTemplate definitions
@@ -210,9 +256,15 @@ ReasonSQL/
 │   ├── models/                 # Pydantic models (unchanged)
 │   └── orchestrator/           # Compatibility shim → backend.graph
 ├── frontend-next/              # Next.js 16 Dashboard
+├── scripts/
+│   ├── evaluate.py             # Golden-case eval (--baseline, --report)
+│   └── golden_cases.json       # 20 evaluation cases
+├── tests/                      # pytest suite (API, adapters)
 ├── data/
 │   └── Chinook_PostgreSql.sql  # Auto-seeded into Docker PostgreSQL
+├── docs/                       # Pages site (Jekyll) + design notes, hosting, roadmap
 ├── configs/settings.py         # 🆕 PostgreSQL + LangSmith + FAISS config
+├── pyproject.toml              # 🆕 installable package, `reasonsql` entry point
 ├── Dockerfile                  # 🆕 Multi-stage build for FastAPI
 ├── docker-compose.yml          # 🆕 postgres + backend + vllm (optional)
 └── requirements.txt            # 🆕 LangChain ecosystem deps
@@ -242,35 +294,9 @@ ReasonSQL/
 
 ---
 
-## 🔬 Retrieval Pipeline (RAG)
+## 📚 Docs
 
-```
-User Query
-    │
-    ▼
-┌────────────────────────────────────────────────────────┐
-│ Hybrid Schema Retrieval                                │
-│                                                        │
-│  ┌──────────────┐    ┌────────────────────────────┐   │
-│  │ BM25 Search  │    │ FAISS Semantic Search       │   │
-│  │ (keyword)    │    │ (HuggingFace embeddings)    │   │
-│  └──────┬───────┘    └────────────┬───────────────┘   │
-│         │                        │                    │
-│         └────────────┬───────────┘                    │
-│                      ▼                                 │
-│           Reciprocal Rank Fusion                       │
-│                      │                                 │
-│                      ▼                                 │
-│         Cross-Encoder Reranking                        │
-│       (ms-marco-MiniLM-L-6-v2)                         │
-│                      │                                 │
-│                      ▼                                 │
-│         Top-N Most Relevant Tables                     │
-└────────────────────────────────────────────────────────┘
-    │
-    ▼
-Schema Context injected into LLM prompt
-```
+Docs site: **<https://the-harsh-vardhan.github.io/ReasonSQL/>** (source in [`docs/`](docs/)): [architecture](docs/architecture.md), [setup](docs/setup.md), [hosting guide](docs/HOSTING.md), [roadmap](docs/ROADMAP.md), [v1 pipeline design](docs/AGENT_PIPELINE.md).
 
 ---
 
