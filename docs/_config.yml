@@ -1,0 +1,6 @@
+theme: jekyll-theme-cayman
+title: ReasonSQL
+description: Multi-agent natural-language-to-SQL with LangGraph, hybrid schema retrieval and a self-correction loop
+show_downloads: false
+exclude:
+  - archive
